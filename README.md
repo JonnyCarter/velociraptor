@@ -60,6 +60,9 @@ List repositories in a GitHub organization:
 
 ```bash
 uv run delivery github repos MY-ORG
+uv run delivery github repos MY-ORG --contains payments
+uv run delivery github repos MY-ORG --sort name
+uv run delivery github repos MY-ORG --include-archived
 ```
 
 ## Analyse

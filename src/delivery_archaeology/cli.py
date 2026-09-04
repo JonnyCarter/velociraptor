@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from delivery_archaeology.config import JiraSettings, StatusMapping
 from delivery_archaeology.findings import build_findings
 from delivery_archaeology.flow import blocked_days, cycle_time_days, reconstruct_issue, rework_loops
-from delivery_archaeology.github import GhCliError, load_or_fetch_all_prs, relative_updated, repos_for_org
+from delivery_archaeology.github import GhCliError, filter_and_sort_repos, load_or_fetch_all_prs, relative_updated, repos_for_org
 from delivery_archaeology.jira import JiraApiError, JiraClient, inspect_project, load_or_fetch_issues, period_start
 from delivery_archaeology.linking import keys_in_pr, link_prs_to_issues
 from delivery_archaeology.metrics import delivery_metrics, issue_flow_records, pr_metrics
@@ -127,13 +127,27 @@ def jira_statuses(project_key: str) -> None:
 
 
 @github_app.command("repos")
-def github_repos(org: str) -> None:
+def github_repos(
+    org: str,
+    contains: Annotated[str | None, typer.Option(help="Case-insensitive repository name filter.")] = None,
+    include_archived: Annotated[bool, typer.Option(help="Include archived repositories.")] = False,
+    sort: Annotated[str, typer.Option(help="Sort by 'updated' or 'name'.")] = "updated",
+) -> None:
+    if sort not in {"updated", "name"}:
+        typer.echo("Sort must be 'updated' or 'name'.", err=True)
+        raise typer.Exit(2)
     try:
         repos = repos_for_org(org)
     except GhCliError as exc:
         gh_error_or_exit(exc)
+    repos = filter_and_sort_repos(
+        repos,
+        contains=contains,
+        include_archived=include_archived,
+        sort=sort,
+    )
     typer.echo(f"{'REPOSITORY':<28} UPDATED")
-    for repo in sorted(repos, key=lambda r: r.get("name", "")):
+    for repo in repos:
         updated = "archived" if repo.get("isArchived") else relative_updated(repo.get("updatedAt"))
         typer.echo(f"{repo.get('name', ''):<28} {updated}")
 

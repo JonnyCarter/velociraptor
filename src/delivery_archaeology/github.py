@@ -104,6 +104,24 @@ def repos_for_org(org: str) -> list[dict[str, Any]]:
     ]) or []
 
 
+def filter_and_sort_repos(
+    repos: list[dict[str, Any]],
+    *,
+    contains: str | None = None,
+    include_archived: bool = False,
+    sort: str = "updated",
+) -> list[dict[str, Any]]:
+    filtered = repos
+    if not include_archived:
+        filtered = [repo for repo in filtered if not repo.get("isArchived")]
+    if contains:
+        needle = contains.casefold()
+        filtered = [repo for repo in filtered if needle in repo.get("name", "").casefold()]
+    if sort == "name":
+        return sorted(filtered, key=lambda repo: repo.get("name", "").casefold())
+    return sorted(filtered, key=lambda repo: (_updated_sort_key(repo.get("updatedAt")), repo.get("name", "").casefold()))
+
+
 def cache_path_for_repo(repo: str, days: int) -> Path:
     owner, name = repo.split("/", 1)
     return RAW_GITHUB_DIR / owner / f"{name}_{days}d_prs.json"
@@ -183,3 +201,13 @@ def relative_updated(value: str | None) -> str:
     if days == 1:
         return "1 day ago"
     return f"{days} days ago"
+
+
+def _updated_sort_key(value: str | None) -> float:
+    if not value:
+        return float("inf")
+    try:
+        updated = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return float("inf")
+    return -updated.timestamp()

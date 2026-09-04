@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from delivery_archaeology.config import JiraSettings, StatusMapping, load_env_file
 from delivery_archaeology.flow import reconstruct_issue, rework_loops
-from delivery_archaeology.github import PR_LIST_FIELDS, pr_list_args, pr_view_args
+from delivery_archaeology.github import PR_LIST_FIELDS, filter_and_sort_repos, pr_list_args, pr_view_args
 from delivery_archaeology.jira import search_payload, updated_since_jql
 from delivery_archaeology.linking import keys_in_pr
 from delivery_archaeology.metrics import delivery_metrics, issue_flow_records, pr_metrics
@@ -79,6 +79,25 @@ def test_github_view_query_fetches_pr_detail_for_one_pr() -> None:
     args = pr_view_args("org/repo", 123, ["number", "reviews", "commits"])
     assert args[:5] == ["pr", "view", "123", "--repo", "org/repo"]
     assert args[-1] == "number,reviews,commits"
+
+
+def test_filter_and_sort_repos_skips_archived_and_sorts_by_updated() -> None:
+    repos = [
+        {"name": "payments-web", "updatedAt": "2026-01-02T00:00:00Z", "isArchived": False},
+        {"name": "old-payments", "updatedAt": "2026-01-03T00:00:00Z", "isArchived": True},
+        {"name": "payments-api", "updatedAt": "2026-01-04T00:00:00Z", "isArchived": False},
+    ]
+    result = filter_and_sort_repos(repos, contains="payments")
+    assert [repo["name"] for repo in result] == ["payments-api", "payments-web"]
+
+
+def test_filter_and_sort_repos_can_sort_by_name_and_include_archived() -> None:
+    repos = [
+        {"name": "zeta", "updatedAt": "2026-01-04T00:00:00Z", "isArchived": False},
+        {"name": "alpha", "updatedAt": "2026-01-01T00:00:00Z", "isArchived": True},
+    ]
+    result = filter_and_sort_repos(repos, include_archived=True, sort="name")
+    assert [repo["name"] for repo in result] == ["alpha", "zeta"]
 
 
 def test_reconstruct_preserves_repeated_states_as_rework() -> None:
