@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from delivery_archaeology.config import StatusMapping
+import pytest
+from pydantic import ValidationError
+
+from delivery_archaeology.config import JiraSettings, StatusMapping
 from delivery_archaeology.flow import reconstruct_issue, rework_loops
 from delivery_archaeology.linking import keys_in_pr
 from delivery_archaeology.metrics import delivery_metrics, issue_flow_records, pr_metrics
@@ -13,6 +16,16 @@ def test_status_mapping_reports_unknowns() -> None:
     mapping = StatusMapping(states={"done": ["Done"], "review": ["Code Review"]})
     assert mapping.classify("code review") == "review"
     assert mapping.unknown_statuses({"Done", "Mystery"}) == {"Mystery"}
+
+
+def test_jira_url_requires_protocol() -> None:
+    with pytest.raises(ValidationError, match="JIRA_URL must include http:// or https://"):
+        JiraSettings.model_validate({"JIRA_URL": "jira.example.internal"})
+
+
+def test_jira_url_is_trimmed() -> None:
+    settings = JiraSettings.model_validate({"JIRA_URL": " https://jira.example.internal/ "})
+    assert settings.url == "https://jira.example.internal"
 
 
 def test_reconstruct_preserves_repeated_states_as_rework() -> None:

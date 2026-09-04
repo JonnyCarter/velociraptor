@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr, field_validator
 
 
 ROOT = Path.cwd()
@@ -21,10 +21,20 @@ class JiraSettings(BaseModel):
     token: SecretStr | None = Field(default=None, alias="JIRA_TOKEN")
     verify_ssl: bool = Field(default=True, alias="JIRA_VERIFY_SSL")
 
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, value: str) -> str:
+        normalized = value.strip().rstrip("/")
+        if not normalized:
+            raise ValueError("JIRA_URL is required and must include http:// or https://")
+        if not normalized.startswith(("http://", "https://")):
+            raise ValueError("JIRA_URL must include http:// or https://")
+        return normalized
+
     @classmethod
     def from_env(cls) -> "JiraSettings":
         values: dict[str, Any] = {
-            "JIRA_URL": os.getenv("JIRA_URL", "").rstrip("/"),
+            "JIRA_URL": os.getenv("JIRA_URL", ""),
             "JIRA_USERNAME": os.getenv("JIRA_USERNAME") or None,
             "JIRA_PASSWORD": os.getenv("JIRA_PASSWORD") or None,
             "JIRA_TOKEN": os.getenv("JIRA_TOKEN") or None,

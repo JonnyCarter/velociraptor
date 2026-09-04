@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from typing import Annotated
 
 import typer
+from pydantic import ValidationError
 
 from delivery_archaeology.config import JiraSettings, StatusMapping
 from delivery_archaeology.findings import build_findings
@@ -23,9 +24,20 @@ app.add_typer(jira_app, name="jira")
 app.add_typer(github_app, name="github")
 
 
+def jira_settings_or_exit() -> JiraSettings:
+    try:
+        return JiraSettings.from_env()
+    except ValidationError as exc:
+        messages = [str(error["msg"]).removeprefix("Value error, ") for error in exc.errors()]
+        typer.echo("Jira configuration error:", err=True)
+        for message in messages:
+            typer.echo(f"  {message}", err=True)
+        raise typer.Exit(2) from exc
+
+
 @jira_app.command("test")
 def jira_test() -> None:
-    settings = JiraSettings.from_env()
+    settings = jira_settings_or_exit()
     client = JiraClient(settings)
     try:
         user = client.myself()
@@ -38,7 +50,7 @@ def jira_test() -> None:
 
 @jira_app.command("projects")
 def jira_projects(contains: Annotated[str | None, typer.Option(help="Case-insensitive project name/key filter.")] = None) -> None:
-    client = JiraClient(JiraSettings.from_env())
+    client = JiraClient(jira_settings_or_exit())
     try:
         projects = client.projects()
     finally:
@@ -53,7 +65,7 @@ def jira_projects(contains: Annotated[str | None, typer.Option(help="Case-insens
 
 @jira_app.command("inspect")
 def jira_inspect(project_key: str, days: Annotated[int, typer.Option()] = 180) -> None:
-    client = JiraClient(JiraSettings.from_env())
+    client = JiraClient(jira_settings_or_exit())
     try:
         info = inspect_project(client, project_key, days)
     finally:
@@ -81,7 +93,7 @@ def jira_inspect(project_key: str, days: Annotated[int, typer.Option()] = 180) -
 
 @jira_app.command("statuses")
 def jira_statuses(project_key: str) -> None:
-    client = JiraClient(JiraSettings.from_env())
+    client = JiraClient(jira_settings_or_exit())
     try:
         statuses = client.statuses_for_project(project_key)
     finally:
@@ -107,7 +119,7 @@ def analyse(
     refresh: Annotated[bool, typer.Option(help="Fetch fresh raw Jira and GitHub data.")] = False,
 ) -> None:
     mapping = StatusMapping.load()
-    client = JiraClient(JiraSettings.from_env())
+    client = JiraClient(jira_settings_or_exit())
     try:
         raw_issues = load_or_fetch_issues(client, jira_project, days, refresh=refresh)
     finally:
@@ -167,7 +179,7 @@ def flow(
 def issue(issue_key: str, days: Annotated[int, typer.Option()] = 365, refresh: Annotated[bool, typer.Option()] = False) -> None:
     project = issue_key.split("-", 1)[0]
     mapping = StatusMapping.load()
-    client = JiraClient(JiraSettings.from_env())
+    client = JiraClient(jira_settings_or_exit())
     try:
         raw = load_or_fetch_issues(client, [project], days, refresh=refresh)
     finally:
