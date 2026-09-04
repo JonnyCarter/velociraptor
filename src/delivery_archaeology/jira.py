@@ -13,6 +13,19 @@ from delivery_archaeology.config import JiraSettings, RAW_JIRA_DIR
 ISSUE_FIELDS = ["*all"]
 
 
+class JiraApiError(RuntimeError):
+    def __init__(self, method: str, path: str, status_code: int, detail: str, *, jql: str | None = None):
+        self.method = method
+        self.path = path
+        self.status_code = status_code
+        self.detail = detail
+        self.jql = jql
+        message = f"Jira {method} {path} returned HTTP {status_code}: {detail}"
+        if jql:
+            message = f"{message}\nJQL: {jql}"
+        super().__init__(message)
+
+
 class JiraClient:
     def __init__(self, settings: JiraSettings):
         self.settings = settings
@@ -92,23 +105,47 @@ class JiraClient:
 
     def _get(self, path: str) -> Any:
         response = self.client.get(path)
-        response.raise_for_status()
+        self._raise_for_status(response, "GET", path)
         return response.json()
 
     def _post(self, path: str, payload: dict[str, Any]) -> Any:
         response = self.client.post(path, json=payload)
-        response.raise_for_status()
+        self._raise_for_status(response, "POST", path, jql=payload.get("jql"))
         return response.json()
+
+    def _raise_for_status(self, response: httpx.Response, method: str, path: str, *, jql: str | None = None) -> None:
+        if response.is_success:
+            return
+        raise JiraApiError(method, path, response.status_code, _error_detail(response), jql=jql)
+
+
+def _error_detail(response: httpx.Response) -> str:
+    try:
+        data = response.json()
+    except ValueError:
+        return response.text[:1000] or response.reason_phrase
+    parts: list[str] = []
+    for message in data.get("errorMessages", []) or []:
+        parts.append(str(message))
+    errors = data.get("errors", {}) or {}
+    for field, message in errors.items():
+        parts.append(f"{field}: {message}")
+    return "; ".join(parts) or str(data)
 
 
 def updated_since_jql(projects: list[str], days: int) -> str:
-    project_clause = ", ".join(projects)
-    return f"project in ({project_clause}) AND updated >= -{days}d ORDER BY updated ASC"
+    project_clause = ", ".join(_quote_project_key(project) for project in projects)
+    return f'project in ({project_clause}) AND updated >= startOfDay("-{days}d") ORDER BY updated ASC'
 
 
 def completed_since_jql(projects: list[str], days: int) -> str:
-    project_clause = ", ".join(projects)
-    return f"project in ({project_clause}) AND statusCategory = Done AND updated >= -{days}d ORDER BY updated ASC"
+    project_clause = ", ".join(_quote_project_key(project) for project in projects)
+    return f'project in ({project_clause}) AND statusCategory = Done AND updated >= startOfDay("-{days}d") ORDER BY updated ASC'
+
+
+def _quote_project_key(project: str) -> str:
+    escaped = project.replace('"', '\\"')
+    return f'"{escaped}"'
 
 
 def cache_path_for_projects(projects: list[str], days: int) -> Path:

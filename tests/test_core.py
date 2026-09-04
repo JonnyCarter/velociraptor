@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from delivery_archaeology.config import JiraSettings, StatusMapping, load_env_file
 from delivery_archaeology.flow import reconstruct_issue, rework_loops
+from delivery_archaeology.jira import updated_since_jql
 from delivery_archaeology.linking import keys_in_pr
 from delivery_archaeology.metrics import delivery_metrics, issue_flow_records, pr_metrics
 from delivery_archaeology.normalize import JiraChange, JiraIssue, PullRequest
@@ -50,6 +51,12 @@ def test_from_env_reads_dotenv_when_process_env_missing(tmp_path, monkeypatch) -
     settings = JiraSettings.from_env()
     assert settings.url == "https://jira.example.internal"
     assert settings.username == "alice"
+
+
+def test_updated_since_jql_quotes_projects_and_uses_start_of_day() -> None:
+    assert updated_since_jql(["PAY", "LEDGER"], 180) == (
+        'project in ("PAY", "LEDGER") AND updated >= startOfDay("-180d") ORDER BY updated ASC'
+    )
 
 
 def test_reconstruct_preserves_repeated_states_as_rework() -> None:

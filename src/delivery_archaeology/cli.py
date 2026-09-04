@@ -10,7 +10,7 @@ from delivery_archaeology.config import JiraSettings, StatusMapping
 from delivery_archaeology.findings import build_findings
 from delivery_archaeology.flow import blocked_days, cycle_time_days, reconstruct_issue, rework_loops
 from delivery_archaeology.github import load_or_fetch_all_prs, relative_updated, repos_for_org
-from delivery_archaeology.jira import JiraClient, inspect_project, load_or_fetch_issues, period_start
+from delivery_archaeology.jira import JiraApiError, JiraClient, inspect_project, load_or_fetch_issues, period_start
 from delivery_archaeology.linking import keys_in_pr, link_prs_to_issues
 from delivery_archaeology.metrics import delivery_metrics, issue_flow_records, pr_metrics
 from delivery_archaeology.normalize import normalize_jira_issues, normalize_prs
@@ -35,12 +35,23 @@ def jira_settings_or_exit() -> JiraSettings:
         raise typer.Exit(2) from exc
 
 
+def jira_api_error_or_exit(exc: JiraApiError) -> None:
+    typer.echo("Jira API error:", err=True)
+    typer.echo(f"  HTTP {exc.status_code} from {exc.method} {exc.path}", err=True)
+    typer.echo(f"  {exc.detail}", err=True)
+    if exc.jql:
+        typer.echo(f"  JQL: {exc.jql}", err=True)
+    raise typer.Exit(1) from exc
+
+
 @jira_app.command("test")
 def jira_test() -> None:
     settings = jira_settings_or_exit()
     client = JiraClient(settings)
     try:
         user = client.myself()
+    except JiraApiError as exc:
+        jira_api_error_or_exit(exc)
     finally:
         client.close()
     typer.echo(f"Connected to: {settings.url}")
@@ -53,6 +64,8 @@ def jira_projects(contains: Annotated[str | None, typer.Option(help="Case-insens
     client = JiraClient(jira_settings_or_exit())
     try:
         projects = client.projects()
+    except JiraApiError as exc:
+        jira_api_error_or_exit(exc)
     finally:
         client.close()
     if contains:
@@ -68,6 +81,8 @@ def jira_inspect(project_key: str, days: Annotated[int, typer.Option()] = 180) -
     client = JiraClient(jira_settings_or_exit())
     try:
         info = inspect_project(client, project_key, days)
+    except JiraApiError as exc:
+        jira_api_error_or_exit(exc)
     finally:
         client.close()
     project = info["project"]
@@ -96,6 +111,8 @@ def jira_statuses(project_key: str) -> None:
     client = JiraClient(jira_settings_or_exit())
     try:
         statuses = client.statuses_for_project(project_key)
+    except JiraApiError as exc:
+        jira_api_error_or_exit(exc)
     finally:
         client.close()
     for status in statuses:
@@ -122,6 +139,8 @@ def analyse(
     client = JiraClient(jira_settings_or_exit())
     try:
         raw_issues = load_or_fetch_issues(client, jira_project, days, refresh=refresh)
+    except JiraApiError as exc:
+        jira_api_error_or_exit(exc)
     finally:
         client.close()
     raw_prs = load_or_fetch_all_prs(repo, days, refresh=refresh)
@@ -182,6 +201,8 @@ def issue(issue_key: str, days: Annotated[int, typer.Option()] = 365, refresh: A
     client = JiraClient(jira_settings_or_exit())
     try:
         raw = load_or_fetch_issues(client, [project], days, refresh=refresh)
+    except JiraApiError as exc:
+        jira_api_error_or_exit(exc)
     finally:
         client.close()
     issues = normalize_jira_issues(raw)
