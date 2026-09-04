@@ -15,7 +15,7 @@ uv sync
 uv run delivery --help
 ```
 
-Copy `.env.example` and configure Jira:
+Copy `.env.example` to `.env` and configure Jira. The CLI reads `.env` from the directory where you run `delivery`; exported shell environment variables take precedence.
 
 ```bash
 JIRA_URL=https://jira.example.internal

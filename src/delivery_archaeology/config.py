@@ -33,14 +33,50 @@ class JiraSettings(BaseModel):
 
     @classmethod
     def from_env(cls) -> "JiraSettings":
+        env_file_values = load_env_file()
         values: dict[str, Any] = {
-            "JIRA_URL": os.getenv("JIRA_URL", ""),
-            "JIRA_USERNAME": os.getenv("JIRA_USERNAME") or None,
-            "JIRA_PASSWORD": os.getenv("JIRA_PASSWORD") or None,
-            "JIRA_TOKEN": os.getenv("JIRA_TOKEN") or None,
-            "JIRA_VERIFY_SSL": _parse_bool(os.getenv("JIRA_VERIFY_SSL", "true")),
+            "JIRA_URL": _env_value("JIRA_URL", env_file_values, ""),
+            "JIRA_USERNAME": _env_value("JIRA_USERNAME", env_file_values) or None,
+            "JIRA_PASSWORD": _env_value("JIRA_PASSWORD", env_file_values) or None,
+            "JIRA_TOKEN": _env_value("JIRA_TOKEN", env_file_values) or None,
+            "JIRA_VERIFY_SSL": _parse_bool(_env_value("JIRA_VERIFY_SSL", env_file_values, "true")),
         }
         return cls.model_validate(values)
+
+
+def load_env_file(path: Path | None = None) -> dict[str, str]:
+    env_path = path or Path.cwd() / ".env"
+    if not env_path.exists():
+        return {}
+    values: dict[str, str] = {}
+    for raw_line in env_path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line.removeprefix("export ").strip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        values[key] = _strip_env_value(value.strip())
+    return values
+
+
+def _env_value(key: str, env_file_values: dict[str, str], default: str = "") -> str:
+    return os.getenv(key) or env_file_values.get(key, default)
+
+
+def _strip_env_value(value: str) -> str:
+    if not value:
+        return ""
+    if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+        return value[1:-1]
+    if " #" in value:
+        return value.split(" #", 1)[0].rstrip()
+    return value
 
 
 def _parse_bool(value: str) -> bool:

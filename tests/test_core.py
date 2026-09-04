@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from pydantic import ValidationError
 
-from delivery_archaeology.config import JiraSettings, StatusMapping
+from delivery_archaeology.config import JiraSettings, StatusMapping, load_env_file
 from delivery_archaeology.flow import reconstruct_issue, rework_loops
 from delivery_archaeology.linking import keys_in_pr
 from delivery_archaeology.metrics import delivery_metrics, issue_flow_records, pr_metrics
@@ -26,6 +26,30 @@ def test_jira_url_requires_protocol() -> None:
 def test_jira_url_is_trimmed() -> None:
     settings = JiraSettings.model_validate({"JIRA_URL": " https://jira.example.internal/ "})
     assert settings.url == "https://jira.example.internal"
+
+
+def test_load_env_file_reads_jira_url(tmp_path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("""
+# local config
+export JIRA_URL="https://jira.example.internal/"
+JIRA_USERNAME=alice
+JIRA_VERIFY_SSL=false # local self-signed cert
+""")
+    values = load_env_file(env_file)
+    assert values["JIRA_URL"] == "https://jira.example.internal/"
+    assert values["JIRA_USERNAME"] == "alice"
+    assert values["JIRA_VERIFY_SSL"] == "false"
+
+
+def test_from_env_reads_dotenv_when_process_env_missing(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("JIRA_URL", raising=False)
+    monkeypatch.delenv("JIRA_USERNAME", raising=False)
+    (tmp_path / ".env").write_text("JIRA_URL=https://jira.example.internal\nJIRA_USERNAME=alice\n")
+    settings = JiraSettings.from_env()
+    assert settings.url == "https://jira.example.internal"
+    assert settings.username == "alice"
 
 
 def test_reconstruct_preserves_repeated_states_as_rework() -> None:
