@@ -30,14 +30,63 @@ PR_FIELDS = [
     "labels",
 ]
 
+PR_LIST_FIELDS = [
+    "number",
+    "title",
+    "author",
+    "createdAt",
+    "updatedAt",
+    "closedAt",
+    "mergedAt",
+    "state",
+    "reviewDecision",
+    "headRefName",
+    "baseRefName",
+    "labels",
+]
+
+PR_DETAIL_FIELDS = [
+    "number",
+    "title",
+    "body",
+    "author",
+    "createdAt",
+    "updatedAt",
+    "closedAt",
+    "mergedAt",
+    "state",
+    "reviewDecision",
+    "reviews",
+    "commits",
+    "additions",
+    "deletions",
+    "changedFiles",
+    "headRefName",
+    "baseRefName",
+    "labels",
+]
+
+PR_FALLBACK_FIELDS = [
+    field for field in PR_DETAIL_FIELDS if field not in {"reviews", "commits"}
+]
+
+
+class GhCliError(RuntimeError):
+    def __init__(self, args: list[str], stderr: str):
+        self.args_used = args
+        self.stderr = stderr
+        super().__init__(f"gh {' '.join(args)} failed: {stderr}")
+
 
 def run_gh(args: list[str]) -> Any:
     result = subprocess.run(
         ["gh", *args],
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
     )
+    if result.returncode != 0:
+        raise GhCliError(args, result.stderr.strip() or result.stdout.strip())
     if not result.stdout.strip():
         return None
     return json.loads(result.stdout)
@@ -65,9 +114,20 @@ def load_or_fetch_prs(repo: str, days: int, *, refresh: bool) -> list[dict[str, 
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists() and not refresh:
         return json.loads(path.read_text())
-    fields = ",".join(PR_FIELDS)
     since = (datetime.now(UTC) - timedelta(days=days)).date().isoformat()
-    prs = run_gh([
+    listed_prs = run_gh(pr_list_args(repo, since)) or []
+    prs = []
+    for listed_pr in listed_prs:
+        number = int(listed_pr["number"])
+        pr = fetch_pr_detail(repo, number)
+        pr["repository"] = repo
+        prs.append(pr)
+    path.write_text(json.dumps(prs, indent=2, sort_keys=True))
+    return prs
+
+
+def pr_list_args(repo: str, since: str) -> list[str]:
+    return [
         "pr",
         "list",
         "--repo",
@@ -79,12 +139,31 @@ def load_or_fetch_prs(repo: str, days: int, *, refresh: bool) -> list[dict[str, 
         "--search",
         f"updated:>={since}",
         "--json",
-        fields,
-    ]) or []
-    for pr in prs:
-        pr["repository"] = repo
-    path.write_text(json.dumps(prs, indent=2, sort_keys=True))
-    return prs
+        ",".join(PR_LIST_FIELDS),
+    ]
+
+
+def pr_view_args(repo: str, number: int, fields: list[str]) -> list[str]:
+    return [
+        "pr",
+        "view",
+        str(number),
+        "--repo",
+        repo,
+        "--json",
+        ",".join(fields),
+    ]
+
+
+def fetch_pr_detail(repo: str, number: int) -> dict[str, Any]:
+    try:
+        return run_gh(pr_view_args(repo, number, PR_DETAIL_FIELDS)) or {}
+    except GhCliError as exc:
+        fallback = run_gh(pr_view_args(repo, number, PR_FALLBACK_FIELDS)) or {}
+        fallback["reviews"] = []
+        fallback["commits"] = []
+        fallback["_detail_warning"] = exc.stderr
+        return fallback
 
 
 def load_or_fetch_all_prs(repos: list[str], days: int, *, refresh: bool) -> list[dict[str, Any]]:

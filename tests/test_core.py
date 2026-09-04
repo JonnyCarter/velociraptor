@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from delivery_archaeology.config import JiraSettings, StatusMapping, load_env_file
 from delivery_archaeology.flow import reconstruct_issue, rework_loops
+from delivery_archaeology.github import PR_LIST_FIELDS, pr_list_args, pr_view_args
 from delivery_archaeology.jira import search_payload, updated_since_jql
 from delivery_archaeology.linking import keys_in_pr
 from delivery_archaeology.metrics import delivery_metrics, issue_flow_records, pr_metrics
@@ -63,6 +64,21 @@ def test_jira_search_payload_uses_array_expand_for_server_compatibility() -> Non
     payload = search_payload("project = PAY", expand="changelog")
     assert payload["expand"] == ["changelog"]
     assert payload["fields"] == ["*all"]
+
+
+def test_github_list_query_avoids_nested_node_heavy_fields() -> None:
+    args = pr_list_args("org/repo", "2026-01-01")
+    fields = args[args.index("--json") + 1].split(",")
+    assert "reviews" not in fields
+    assert "commits" not in fields
+    assert "body" not in fields
+    assert fields == PR_LIST_FIELDS
+
+
+def test_github_view_query_fetches_pr_detail_for_one_pr() -> None:
+    args = pr_view_args("org/repo", 123, ["number", "reviews", "commits"])
+    assert args[:5] == ["pr", "view", "123", "--repo", "org/repo"]
+    assert args[-1] == "number,reviews,commits"
 
 
 def test_reconstruct_preserves_repeated_states_as_rework() -> None:

@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from delivery_archaeology.config import JiraSettings, StatusMapping
 from delivery_archaeology.findings import build_findings
 from delivery_archaeology.flow import blocked_days, cycle_time_days, reconstruct_issue, rework_loops
-from delivery_archaeology.github import load_or_fetch_all_prs, relative_updated, repos_for_org
+from delivery_archaeology.github import GhCliError, load_or_fetch_all_prs, relative_updated, repos_for_org
 from delivery_archaeology.jira import JiraApiError, JiraClient, inspect_project, load_or_fetch_issues, period_start
 from delivery_archaeology.linking import keys_in_pr, link_prs_to_issues
 from delivery_archaeology.metrics import delivery_metrics, issue_flow_records, pr_metrics
@@ -41,6 +41,13 @@ def jira_api_error_or_exit(exc: JiraApiError) -> None:
     typer.echo(f"  {exc.detail}", err=True)
     if exc.jql:
         typer.echo(f"  JQL: {exc.jql}", err=True)
+    raise typer.Exit(1) from exc
+
+
+def gh_error_or_exit(exc: GhCliError) -> None:
+    typer.echo("GitHub CLI error:", err=True)
+    typer.echo(f"  gh {' '.join(exc.args_used)}", err=True)
+    typer.echo(f"  {exc.stderr}", err=True)
     raise typer.Exit(1) from exc
 
 
@@ -121,7 +128,10 @@ def jira_statuses(project_key: str) -> None:
 
 @github_app.command("repos")
 def github_repos(org: str) -> None:
-    repos = repos_for_org(org)
+    try:
+        repos = repos_for_org(org)
+    except GhCliError as exc:
+        gh_error_or_exit(exc)
     typer.echo(f"{'REPOSITORY':<28} UPDATED")
     for repo in sorted(repos, key=lambda r: r.get("name", "")):
         updated = "archived" if repo.get("isArchived") else relative_updated(repo.get("updatedAt"))
@@ -143,7 +153,10 @@ def analyse(
         jira_api_error_or_exit(exc)
     finally:
         client.close()
-    raw_prs = load_or_fetch_all_prs(repo, days, refresh=refresh)
+    try:
+        raw_prs = load_or_fetch_all_prs(repo, days, refresh=refresh)
+    except GhCliError as exc:
+        gh_error_or_exit(exc)
     issues = normalize_jira_issues(raw_issues)
     prs = normalize_prs(raw_prs)
     timelines = {issue.key: reconstruct_issue(issue, mapping) for issue in issues}
