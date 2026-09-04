@@ -72,18 +72,17 @@ class JiraClient:
         jql: str,
         *,
         fields: list[str] | None = None,
-        expand: str | None = None,
+        expand: str | list[str] | None = None,
         start_at: int = 0,
         max_results: int = 100,
     ) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "jql": jql,
-            "startAt": start_at,
-            "maxResults": max_results,
-            "fields": fields or ISSUE_FIELDS,
-        }
-        if expand:
-            payload["expand"] = expand
+        payload = search_payload(
+            jql,
+            fields=fields,
+            expand=expand,
+            start_at=start_at,
+            max_results=max_results,
+        )
         return self._post("/rest/api/2/search", payload)
 
     def search_all(
@@ -91,7 +90,7 @@ class JiraClient:
         jql: str,
         *,
         fields: list[str] | None = None,
-        expand: str | None = None,
+        expand: str | list[str] | None = None,
     ) -> list[dict[str, Any]]:
         issues: list[dict[str, Any]] = []
         start = 0
@@ -131,6 +130,25 @@ def _error_detail(response: httpx.Response) -> str:
     for field, message in errors.items():
         parts.append(f"{field}: {message}")
     return "; ".join(parts) or str(data)
+
+
+def search_payload(
+    jql: str,
+    *,
+    fields: list[str] | None = None,
+    expand: str | list[str] | None = None,
+    start_at: int = 0,
+    max_results: int = 100,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "jql": jql,
+        "startAt": start_at,
+        "maxResults": max_results,
+        "fields": fields or ISSUE_FIELDS,
+    }
+    if expand:
+        payload["expand"] = [expand] if isinstance(expand, str) else expand
+    return payload
 
 
 def updated_since_jql(projects: list[str], days: int) -> str:
