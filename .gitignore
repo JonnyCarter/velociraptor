@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.env
+
+data/raw/**/*.json
+data/processed/*
+!data/raw/jira/.gitkeep
+!data/raw/github/.gitkeep
+!data/processed/.gitkeep

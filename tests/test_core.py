@@ -1,0 +1,91 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+
+from delivery_archaeology.config import StatusMapping
+from delivery_archaeology.flow import reconstruct_issue, rework_loops
+from delivery_archaeology.linking import keys_in_pr
+from delivery_archaeology.metrics import delivery_metrics, issue_flow_records, pr_metrics
+from delivery_archaeology.normalize import JiraChange, JiraIssue, PullRequest
+
+
+def test_status_mapping_reports_unknowns() -> None:
+    mapping = StatusMapping(states={"done": ["Done"], "review": ["Code Review"]})
+    assert mapping.classify("code review") == "review"
+    assert mapping.unknown_statuses({"Done", "Mystery"}) == {"Mystery"}
+
+
+def test_reconstruct_preserves_repeated_states_as_rework() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    issue = JiraIssue(
+        id="1",
+        key="PAY-123",
+        project="PAY",
+        status="Done",
+        created=start,
+        updated=start + timedelta(days=9),
+        resolved=start + timedelta(days=9),
+        changelog=[
+            JiraChange(issue_key="PAY-123", timestamp=start + timedelta(days=1), field="status", from_value="Ready", to_value="In Progress"),
+            JiraChange(issue_key="PAY-123", timestamp=start + timedelta(days=4), field="status", from_value="In Progress", to_value="Code Review"),
+            JiraChange(issue_key="PAY-123", timestamp=start + timedelta(days=5), field="status", from_value="Code Review", to_value="In Progress"),
+            JiraChange(issue_key="PAY-123", timestamp=start + timedelta(days=6), field="status", from_value="In Progress", to_value="Done"),
+        ],
+    )
+    mapping = StatusMapping(states={"ready": ["Ready"], "development": ["In Progress"], "review": ["Code Review"], "done": ["Done"]})
+    timeline = reconstruct_issue(issue, mapping)
+    assert [segment.state for segment in timeline] == ["ready", "development", "review", "development", "done"]
+    assert rework_loops(timeline) == 1
+
+
+def test_links_keys_from_title_branch_body_and_commits() -> None:
+    pr = PullRequest(
+        repository="org/repo",
+        number=7,
+        title="PAY-123 add capture",
+        body="Related to LEDGER-9",
+        head_ref_name="feature/IDENT-22-login",
+        commits=[{"message": "PLAT-44 wire dependency"}],
+    )
+    assert keys_in_pr(pr) == {"PAY-123", "LEDGER-9", "IDENT-22", "PLAT-44"}
+
+
+def test_delivery_metrics_include_blocked_impact() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    mapping = StatusMapping(states={"ready": ["Ready"], "development": ["In Progress"], "blocked": ["Blocked"], "done": ["Done"]})
+    issues = [
+        JiraIssue(id="1", key="PAY-1", project="PAY", status="Done", created=start, updated=start + timedelta(days=4), resolved=start + timedelta(days=4), changelog=[
+            JiraChange(issue_key="PAY-1", timestamp=start + timedelta(days=1), field="status", from_value="Ready", to_value="In Progress"),
+            JiraChange(issue_key="PAY-1", timestamp=start + timedelta(days=4), field="status", from_value="In Progress", to_value="Done"),
+        ]),
+        JiraIssue(id="2", key="PAY-2", project="PAY", status="Done", created=start, updated=start + timedelta(days=10), resolved=start + timedelta(days=10), changelog=[
+            JiraChange(issue_key="PAY-2", timestamp=start + timedelta(days=1), field="status", from_value="Ready", to_value="In Progress"),
+            JiraChange(issue_key="PAY-2", timestamp=start + timedelta(days=3), field="status", from_value="In Progress", to_value="Blocked"),
+            JiraChange(issue_key="PAY-2", timestamp=start + timedelta(days=8), field="status", from_value="Blocked", to_value="In Progress"),
+            JiraChange(issue_key="PAY-2", timestamp=start + timedelta(days=10), field="status", from_value="In Progress", to_value="Done"),
+        ]),
+    ]
+    timelines = {issue.key: reconstruct_issue(issue, mapping) for issue in issues}
+    records = issue_flow_records(issues, timelines)
+    metrics = delivery_metrics(records, timelines, 14)
+    assert metrics["completed_count"] == 2
+    assert metrics["blocked_percent"] == 50
+    assert metrics["blocked_cycle_median"] == 10
+
+
+def test_pr_metrics() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    pr = PullRequest(
+        repository="org/repo",
+        number=1,
+        title="PAY-1",
+        created_at=start,
+        merged_at=start + timedelta(days=2),
+        additions=10,
+        changed_files=3,
+        reviews=[{"state": "APPROVED", "submittedAt": (start + timedelta(hours=6)).isoformat()}],
+    )
+    metrics = pr_metrics([pr])
+    assert metrics["pr_count"] == 1
+    assert metrics["lifetime_median"] == 2
+    assert metrics["first_review_median"] == 0.25

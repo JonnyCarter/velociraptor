@@ -1,0 +1,33 @@
+backlog:
+  - Backlog
+  - Open
+
+ready:
+  - Ready
+  - Ready for Development
+
+development:
+  - In Progress
+  - Development
+
+review:
+  - Code Review
+  - Peer Review
+
+qa:
+  - QA
+  - Testing
+  - Validation
+
+blocked:
+  - Blocked
+  - On Hold
+
+release:
+  - Ready for Release
+  - Deploying
+
+done:
+  - Done
+  - Closed
+  - Released
