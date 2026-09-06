@@ -47,6 +47,7 @@ class JiraChange(BaseModel):
 class PullRequest(BaseModel):
     repository: str
     number: int
+    url: str | None = None
     title: str
     body: str | None = None
     author: str | None = None
@@ -138,6 +139,7 @@ def normalize_pr(raw: dict[str, Any]) -> PullRequest:
     return PullRequest(
         repository=raw.get("repository", ""),
         number=int(raw["number"]),
+        url=raw.get("url"),
         title=raw.get("title") or "",
         body=raw.get("body"),
         author=author.get("login") if isinstance(author, dict) else author,

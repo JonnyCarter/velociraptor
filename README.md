@@ -65,6 +65,12 @@ uv run delivery github repos MY-ORG --sort name
 uv run delivery github repos MY-ORG --include-archived
 ```
 
+Optional mascot:
+
+```bash
+uv run delivery raptor
+```
+
 ## Analyse
 
 Single Jira project:
@@ -127,6 +133,7 @@ The initial `analyse` command reports:
 - waiting time, handoffs, and rework loops;
 - PR count, PR lifetime, time to first review, approval-to-merge time, PR size, and review count;
 - Jira/PR linking coverage;
+- linked review candidates for long-running issues, blocked work, workflow loops, long-lived PRs, slow first review, and high review back-and-forth;
 - deterministic evidence-backed findings with observation, evidence, sample size, and interpretation.
 
 The analysis focuses on work, queues, flow, dependencies, rework, quality, variability, and delivery-system behavior.

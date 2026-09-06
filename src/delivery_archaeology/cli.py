@@ -6,13 +6,14 @@ from typing import Annotated
 import typer
 from pydantic import ValidationError
 
+from delivery_archaeology.art import VELOCIRAPTOR
 from delivery_archaeology.config import JiraSettings, StatusMapping
 from delivery_archaeology.findings import build_findings
 from delivery_archaeology.flow import blocked_days, cycle_time_days, reconstruct_issue, rework_loops
 from delivery_archaeology.github import GhCliError, filter_and_sort_repos, load_or_fetch_all_prs, relative_updated, repos_for_org
 from delivery_archaeology.jira import JiraApiError, JiraClient, inspect_project, load_or_fetch_issues, period_start
 from delivery_archaeology.linking import keys_in_pr, link_prs_to_issues
-from delivery_archaeology.metrics import delivery_metrics, issue_flow_records, pr_metrics
+from delivery_archaeology.metrics import delivery_metrics, issue_flow_records, issue_review_candidates, pr_metrics, pr_review_candidates
 from delivery_archaeology.normalize import normalize_jira_issues, normalize_prs
 from delivery_archaeology.reporting import render_analysis_report, render_issue
 
@@ -160,7 +161,8 @@ def analyse(
     refresh: Annotated[bool, typer.Option(help="Fetch fresh raw Jira and GitHub data.")] = False,
 ) -> None:
     mapping = StatusMapping.load()
-    client = JiraClient(jira_settings_or_exit())
+    settings = jira_settings_or_exit()
+    client = JiraClient(settings)
     try:
         raw_issues = load_or_fetch_issues(client, jira_project, days, refresh=refresh)
     except JiraApiError as exc:
@@ -209,6 +211,8 @@ def analyse(
         missing_resolution_dates=missing_resolution_dates,
         pr_without_links=pr_without_links,
         findings=findings,
+        issue_candidates=issue_review_candidates(issues, records, jira_url=settings.url),
+        pr_candidates=pr_review_candidates(prs),
     ))
 
 
@@ -244,6 +248,11 @@ def issue(issue_key: str, days: Annotated[int, typer.Option()] = 365, refresh: A
 @app.command("epic")
 def epic(epic_key: str) -> None:
     typer.echo("Epic analysis is reserved for the next iteration. Use `delivery analyse` for the initial workflow.")
+
+
+@app.command("raptor")
+def raptor() -> None:
+    typer.echo(VELOCIRAPTOR)
 
 
 if __name__ == "__main__":

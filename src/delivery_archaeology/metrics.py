@@ -29,6 +29,17 @@ class IssueFlowRecord:
     handoffs: int
 
 
+@dataclass(frozen=True)
+class ReviewCandidate:
+    kind: str
+    identifier: str
+    title: str
+    url: str
+    reason: str
+    evidence: str
+    score: float
+
+
 def issue_flow_records(issues: list[JiraIssue], timelines: dict[str, list[StateSegment]]) -> list[IssueFlowRecord]:
     records: list[IssueFlowRecord] = []
     for issue in issues:
@@ -137,6 +148,114 @@ def pr_metrics(prs: list[PullRequest]) -> dict[str, object]:
         "review_count_median": percentile(review_counts, 50),
         "sample_size": len(prs),
     }
+
+
+def issue_review_candidates(
+    issues: list[JiraIssue],
+    records: list[IssueFlowRecord],
+    *,
+    jira_url: str,
+    limit: int = 8,
+) -> list[ReviewCandidate]:
+    issue_by_key = {issue.key: issue for issue in issues}
+    candidates: list[ReviewCandidate] = []
+    completed = [record for record in records if record.completed]
+    cycle_p95 = percentile([record.cycle_days for record in completed if record.cycle_days is not None], 95)
+    for record in completed:
+        issue = issue_by_key.get(record.key)
+        if not issue:
+            continue
+        reasons: list[tuple[int, str, str]] = []
+        if record.cycle_days is not None and cycle_p95 is not None and record.cycle_days >= cycle_p95:
+            reasons.append((40, "Cycle-time outlier", f"Cycle time {record.cycle_days:.1f}d, at or above P95 {cycle_p95:.1f}d."))
+        if record.blocked_days > 0:
+            reasons.append((30 + int(record.blocked_days), "Blocked-time candidate", f"Blocked for {record.blocked_days:.1f}d."))
+        if record.rework_loops > 0:
+            reasons.append((25 + record.rework_loops, "Workflow-loop candidate", f"Re-entered a previous workflow state {record.rework_loops} time(s)."))
+        if not reasons:
+            continue
+        priority, reason, _evidence = max(reasons, key=lambda item: item[0])
+        evidence = " ".join(item[2] for item in sorted(reasons, key=lambda item: item[0], reverse=True))
+        candidates.append(ReviewCandidate(
+            kind="issue",
+            identifier=record.key,
+            title=issue.summary or "",
+            url=f"{jira_url.rstrip('/')}/browse/{record.key}",
+            reason=reason,
+            evidence=evidence,
+            score=float(priority),
+        ))
+    return sorted(candidates, key=_candidate_sort_key)[:limit]
+
+
+def pr_review_candidates(prs: list[PullRequest], *, limit: int = 8) -> list[ReviewCandidate]:
+    candidates: list[ReviewCandidate] = []
+    lifetimes = [_pr_lifetime_days(pr) for pr in prs]
+    first_reviews = [_pr_first_review_days(pr) for pr in prs]
+    review_counts = [len(pr.reviews) for pr in prs]
+    lifetime_p95 = percentile([value for value in lifetimes if value is not None], 95)
+    first_review_p95 = percentile([value for value in first_reviews if value is not None], 95)
+    review_count_p95 = percentile(review_counts, 95)
+    for pr in prs:
+        reasons: list[tuple[float, str, str]] = []
+        lifetime = _pr_lifetime_days(pr)
+        first_review = _pr_first_review_days(pr)
+        review_count = len(pr.reviews)
+        if lifetime is not None and lifetime_p95 is not None and lifetime >= lifetime_p95:
+            reasons.append((40 + lifetime, "PR lifetime outlier", f"Open-to-close lifetime {lifetime:.1f}d, at or above P95 {lifetime_p95:.1f}d."))
+        if first_review is not None and first_review_p95 is not None and first_review >= first_review_p95:
+            reasons.append((35 + first_review, "Slow first review", f"First review after {_days_or_hours(first_review)}, at or above P95 {_days_or_hours(first_review_p95)}."))
+        if review_count_p95 is not None and review_count > 0 and review_count >= review_count_p95 and review_count >= 5:
+            reasons.append((30 + review_count, "High review back-and-forth", f"{review_count} review events, at or above P95 {review_count_p95:.0f}."))
+        if not reasons:
+            continue
+        priority, reason, _evidence = max(reasons, key=lambda item: item[0])
+        evidence = " ".join(item[2] for item in sorted(reasons, key=lambda item: item[0], reverse=True))
+        candidates.append(ReviewCandidate(
+            kind="pr",
+            identifier=f"{pr.repository}#{pr.number}",
+            title=pr.title,
+            url=pr.url or f"https://github.com/{pr.repository}/pull/{pr.number}",
+            reason=reason,
+            evidence=evidence,
+            score=float(priority),
+        ))
+    return sorted(candidates, key=_candidate_sort_key)[:limit]
+
+
+def _candidate_sort_key(candidate: ReviewCandidate) -> tuple[int, float, str]:
+    reason_rank = {
+        "Cycle-time outlier": 0,
+        "PR lifetime outlier": 1,
+        "Blocked-time candidate": 2,
+        "Slow first review": 3,
+        "High review back-and-forth": 4,
+        "Workflow-loop candidate": 5,
+    }
+    return (reason_rank.get(candidate.reason, 99), -candidate.score, candidate.identifier)
+
+
+def _pr_lifetime_days(pr: PullRequest) -> float | None:
+    end = pr.merged_at or pr.closed_at
+    if not pr.created_at or not end:
+        return None
+    return (end - pr.created_at).total_seconds() / 86400
+
+
+def _pr_first_review_days(pr: PullRequest) -> float | None:
+    review_times = sorted([
+        parsed for review in pr.reviews
+        if (parsed := _review_submitted_at(review)) is not None
+    ])
+    if not pr.created_at or not review_times:
+        return None
+    return (review_times[0] - pr.created_at).total_seconds() / 86400
+
+
+def _days_or_hours(days: float) -> str:
+    if days < 1:
+        return f"{days * 24:.1f}h"
+    return f"{days:.1f}d"
 
 
 def _review_submitted_at(review: dict) -> datetime | None:

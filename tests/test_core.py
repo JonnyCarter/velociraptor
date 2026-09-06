@@ -5,12 +5,13 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from pydantic import ValidationError
 
+from delivery_archaeology.art import VELOCIRAPTOR
 from delivery_archaeology.config import JiraSettings, StatusMapping, load_env_file
 from delivery_archaeology.flow import reconstruct_issue, rework_loops
 from delivery_archaeology.github import PR_LIST_FIELDS, filter_and_sort_repos, pr_list_args, pr_view_args
 from delivery_archaeology.jira import search_payload, updated_since_jql
 from delivery_archaeology.linking import keys_in_pr
-from delivery_archaeology.metrics import delivery_metrics, issue_flow_records, pr_metrics
+from delivery_archaeology.metrics import delivery_metrics, issue_flow_records, issue_review_candidates, pr_metrics, pr_review_candidates
 from delivery_archaeology.normalize import JiraChange, JiraIssue, PullRequest
 
 
@@ -18,6 +19,10 @@ def test_status_mapping_reports_unknowns() -> None:
     mapping = StatusMapping(states={"done": ["Done"], "review": ["Code Review"]})
     assert mapping.classify("code review") == "review"
     assert mapping.unknown_statuses({"Done", "Mystery"}) == {"Mystery"}
+
+
+def test_velociraptor_art_is_available() -> None:
+    assert "velociraptor" in VELOCIRAPTOR
 
 
 def test_jira_url_requires_protocol() -> None:
@@ -156,6 +161,34 @@ def test_delivery_metrics_include_blocked_impact() -> None:
     assert metrics["completed_count"] == 2
     assert metrics["blocked_percent"] == 50
     assert metrics["blocked_cycle_median"] == 10
+
+
+def test_issue_review_candidates_include_jira_links_and_reasons() -> None:
+    records = [
+        type("Record", (), {"key": "PAY-1", "completed": True, "cycle_days": 4.0, "blocked_days": 0.0, "rework_loops": 0})(),
+        type("Record", (), {"key": "PAY-2", "completed": True, "cycle_days": 20.0, "blocked_days": 6.0, "rework_loops": 1})(),
+    ]
+    issues = [
+        JiraIssue(id="1", key="PAY-1", project="PAY", summary="Small change"),
+        JiraIssue(id="2", key="PAY-2", project="PAY", summary="Slow change"),
+    ]
+    candidates = issue_review_candidates(issues, records, jira_url="https://jira.example.internal")
+    assert candidates[0].identifier == "PAY-2"
+    assert candidates[0].url == "https://jira.example.internal/browse/PAY-2"
+    assert candidates[0].reason == "Cycle-time outlier"
+
+
+def test_pr_review_candidates_include_pr_links_and_back_and_forth() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    reviews = [{"state": "COMMENTED", "submittedAt": (start + timedelta(hours=index)).isoformat()} for index in range(6)]
+    prs = [
+        PullRequest(repository="org/repo", number=1, title="PAY-1", created_at=start, merged_at=start + timedelta(days=1), reviews=[]),
+        PullRequest(repository="org/repo", number=2, title="PAY-2", url="https://github.example/org/repo/pull/2", created_at=start, merged_at=start + timedelta(days=5), reviews=reviews),
+    ]
+    candidates = pr_review_candidates(prs)
+    assert candidates[0].identifier == "org/repo#2"
+    assert candidates[0].url == "https://github.example/org/repo/pull/2"
+    assert candidates[0].reason in {"PR lifetime outlier", "High review back-and-forth"}
 
 
 def test_pr_metrics() -> None:

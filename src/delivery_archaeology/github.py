@@ -11,6 +11,7 @@ from delivery_archaeology.config import RAW_GITHUB_DIR
 
 PR_FIELDS = [
     "number",
+    "url",
     "title",
     "body",
     "author",
@@ -32,6 +33,7 @@ PR_FIELDS = [
 
 PR_LIST_FIELDS = [
     "number",
+    "url",
     "title",
     "author",
     "createdAt",
@@ -47,6 +49,7 @@ PR_LIST_FIELDS = [
 
 PR_DETAIL_FIELDS = [
     "number",
+    "url",
     "title",
     "body",
     "author",

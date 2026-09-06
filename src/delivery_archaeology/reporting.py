@@ -4,7 +4,7 @@ from datetime import datetime
 
 from delivery_archaeology.findings import Finding
 from delivery_archaeology.flow import StateSegment
-from delivery_archaeology.metrics import IssueFlowRecord
+from delivery_archaeology.metrics import ReviewCandidate
 from delivery_archaeology.normalize import JiraIssue, PullRequest
 
 
@@ -24,6 +24,8 @@ def render_analysis_report(
     missing_resolution_dates: int,
     pr_without_links: int,
     findings: list[Finding],
+    issue_candidates: list[ReviewCandidate],
+    pr_candidates: list[ReviewCandidate],
 ) -> str:
     lines = [
         "DELIVERY ANALYSIS",
@@ -91,6 +93,21 @@ def render_analysis_report(
         f"Median changed files:        {_fmt(github.get('changed_files_median'))}",
         f"Median review count:         {_fmt(github.get('review_count_median'))}",
         "",
+        "REVIEW CANDIDATES",
+        "=================",
+        "",
+        "Jira issues worth examining",
+        "---------------------------",
+    ])
+    lines.extend(_render_candidates(issue_candidates))
+    lines.extend([
+        "",
+        "PRs worth examining",
+        "-------------------",
+    ])
+    lines.extend(_render_candidates(pr_candidates))
+    lines.extend([
+        "",
         "FINDINGS",
         "========",
         "",
@@ -152,3 +169,19 @@ def _fmt_pct(value: object) -> str:
     if not isinstance(value, (int, float)):
         return "n/a"
     return f"{value:.1f}%"
+
+
+def _render_candidates(candidates: list[ReviewCandidate]) -> list[str]:
+    if not candidates:
+        return ["none"]
+    lines: list[str] = []
+    for candidate in candidates:
+        title = f" - {candidate.title}" if candidate.title else ""
+        lines.extend([
+            f"{candidate.identifier}{title}",
+            f"Reason:   {candidate.reason}",
+            f"Evidence: {candidate.evidence}",
+            f"Link:     {candidate.url}",
+            "",
+        ])
+    return lines[:-1]
