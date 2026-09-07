@@ -10,8 +10,8 @@ from delivery_archaeology.analysis import analyse_window, comparison_rows, weekl
 from delivery_archaeology.art import VELOCIRAPTOR
 from delivery_archaeology.config import JiraSettings, StatusMapping, load_env_file
 from delivery_archaeology.flow import reconstruct_issue, rework_loops
-from delivery_archaeology.github import PR_LIST_FIELDS, filter_and_sort_repos, pr_list_args, pr_view_args
-from delivery_archaeology.github import infer_repos_from_search_results
+from delivery_archaeology.github import GITHUB_SEARCH_ISSUE_KEY_CHUNK_SIZE, GhCliError, PR_LIST_FIELDS, filter_and_sort_repos, pr_list_args, pr_view_args
+from delivery_archaeology.github import infer_repos_from_search_results, search_prs_for_issue_keys
 from delivery_archaeology.inference import analyse_command_for_repos, extract_pr_urls, infer_repos_from_jira_development_links, issue_keys_for_repo_inference, repo_from_pr_url
 from delivery_archaeology.jira import covering_cache_path_for_projects, load_or_fetch_development_links, search_payload, updated_since_jql
 from delivery_archaeology.linking import keys_in_pr
@@ -187,6 +187,46 @@ def test_infer_repos_from_search_results_counts_pr_and_issue_evidence() -> None:
     assert repos[0]["repository"] == "my-org/payments-api"
     assert repos[0]["pr_count"] == 2
     assert repos[0]["issue_count"] == 2
+
+
+def test_github_issue_search_uses_small_chunks_to_avoid_operator_limit(monkeypatch) -> None:
+    import delivery_archaeology.github as github
+
+    calls: list[list[str]] = []
+
+    def fake_run_gh(args: list[str]) -> dict[str, object]:
+        calls.append(args)
+        return {"items": []}
+
+    monkeypatch.setattr(github, "run_gh", fake_run_gh)
+
+    search_prs_for_issue_keys("my-org", [f"PAY-{index}" for index in range(1, 8)], days=180)
+
+    assert GITHUB_SEARCH_ISSUE_KEY_CHUNK_SIZE == 3
+    assert len(calls) == 3
+    queries = [next(arg.removeprefix("q=") for arg in call if arg.startswith("q=")) for call in calls]
+    assert [query.count(" OR ") for query in queries] == [2, 2, 0]
+
+
+def test_github_issue_search_retries_operator_limit_chunks_individually(monkeypatch) -> None:
+    import delivery_archaeology.github as github
+
+    calls: list[str] = []
+
+    def fake_run_gh(args: list[str]) -> dict[str, object]:
+        query = next(arg.removeprefix("q=") for arg in args if arg.startswith("q="))
+        calls.append(query)
+        if " OR " in query:
+            raise GhCliError(args, "HTTP 422: more than 5 AND / OR operators")
+        return {"items": [{"id": len(calls), "html_url": f"https://github.com/my-org/repo/pull/{len(calls)}"}]}
+
+    monkeypatch.setattr(github, "run_gh", fake_run_gh)
+
+    results = search_prs_for_issue_keys("my-org", ["PAY-1", "PAY-2", "PAY-3"], days=180)
+
+    assert len(calls) == 4
+    assert len(results) == 3
+    assert all(" OR " not in query for query in calls[1:])
 
 
 def test_analyse_command_for_repos_prints_ready_to_run_command() -> None:

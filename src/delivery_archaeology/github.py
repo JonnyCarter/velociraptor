@@ -12,6 +12,7 @@ from delivery_archaeology.linking import ISSUE_KEY_RE
 
 
 Progress = Callable[[str], None] | None
+GITHUB_SEARCH_ISSUE_KEY_CHUNK_SIZE = 3
 
 
 PR_FIELDS = [
@@ -232,26 +233,29 @@ def load_or_fetch_all_prs(repos: list[str], days: int, *, refresh: bool, progres
     return prs
 
 
-def search_prs_for_issue_keys(org: str, issue_keys: list[str], *, days: int, chunk_size: int = 8, progress: Progress = None) -> list[dict[str, Any]]:
+def search_prs_for_issue_keys(
+    org: str,
+    issue_keys: list[str],
+    *,
+    days: int,
+    chunk_size: int = GITHUB_SEARCH_ISSUE_KEY_CHUNK_SIZE,
+    progress: Progress = None,
+) -> list[dict[str, Any]]:
     since = (datetime.now(UTC) - timedelta(days=days)).date().isoformat()
     items: list[dict[str, Any]] = []
     chunks = _chunks(issue_keys, chunk_size)
     for index, chunk in enumerate(chunks, start=1):
         if progress:
             progress(f"GitHub fallback search chunk {index}/{len(chunks)}")
-        key_query = " OR ".join(_quote_search_term(key) for key in chunk)
-        query = f"org:{org} is:pr updated:>={since} ({key_query})"
-        result = run_gh([
-            "api",
-            "-X",
-            "GET",
-            "search/issues",
-            "-f",
-            f"q={query}",
-            "-f",
-            "per_page=100",
-        ]) or {}
-        items.extend(result.get("items", []))
+        try:
+            items.extend(_search_pr_chunk(org, chunk, since).get("items", []))
+        except GhCliError as exc:
+            if len(chunk) == 1 or not _looks_like_search_operator_limit(exc):
+                raise
+            if progress:
+                progress("GitHub search operator limit hit; retrying issue keys individually")
+            for issue_key in chunk:
+                items.extend(_search_pr_chunk(org, [issue_key], since).get("items", []))
     return _deduplicate_search_items(items)
 
 
@@ -319,6 +323,26 @@ def _chunks(values: list[str], size: int) -> list[list[str]]:
 
 def _quote_search_term(value: str) -> str:
     return f'"{value}"'
+
+
+def _search_pr_chunk(org: str, issue_keys: list[str], since: str) -> dict[str, Any]:
+    key_query = " OR ".join(_quote_search_term(key) for key in issue_keys)
+    query = f"org:{org} is:pr updated:>={since} ({key_query})"
+    return run_gh([
+        "api",
+        "-X",
+        "GET",
+        "search/issues",
+        "-f",
+        f"q={query}",
+        "-f",
+        "per_page=100",
+    ]) or {}
+
+
+def _looks_like_search_operator_limit(exc: GhCliError) -> bool:
+    detail = exc.stderr.casefold()
+    return "422" in detail and "operator" in detail
 
 
 def _deduplicate_search_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
