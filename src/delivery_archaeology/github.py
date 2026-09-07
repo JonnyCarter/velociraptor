@@ -9,6 +9,7 @@ from typing import Any, Callable
 
 from delivery_archaeology.config import RAW_GITHUB_DIR
 from delivery_archaeology.linking import ISSUE_KEY_RE
+from delivery_archaeology.storage import safe_cache_slug
 
 
 Progress = Callable[[str], None] | None
@@ -133,15 +134,16 @@ def filter_and_sort_repos(
 
 def cache_path_for_repo(repo: str, days: int) -> Path:
     owner, name = repo.split("/", 1)
-    return RAW_GITHUB_DIR / owner / f"{name}_{days}d_prs.json"
+    return RAW_GITHUB_DIR / safe_cache_slug(owner) / f"{safe_cache_slug(name)}_{days}d_prs.json"
 
 
 def covering_cache_path_for_repo(repo: str, days: int) -> Path | None:
     owner, name = repo.split("/", 1)
-    repo_dir = RAW_GITHUB_DIR / owner
+    safe_name = safe_cache_slug(name)
+    repo_dir = RAW_GITHUB_DIR / safe_cache_slug(owner)
     candidates: list[tuple[int, Path]] = []
-    for path in repo_dir.glob(f"{name}_*d_prs.json"):
-        match = re.fullmatch(rf"{re.escape(name)}_(\d+)d_prs\.json", path.name)
+    for path in repo_dir.glob(f"{safe_name}_*d_prs.json"):
+        match = re.fullmatch(rf"{re.escape(safe_name)}_(\d+)d_prs\.json", path.name)
         if match and int(match.group(1)) >= days:
             candidates.append((int(match.group(1)), path))
     if not candidates:

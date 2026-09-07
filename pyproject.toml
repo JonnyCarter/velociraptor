@@ -1,6 +1,6 @@
 [project]
 name = "delivery-archaeology"
-version = "1.0.0"
+version = "1.0.1"
 description = "Command-line delivery-system analysis using Jira and GitHub."
 readme = "README.md"
 requires-python = ">=3.12"

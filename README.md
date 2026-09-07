@@ -4,7 +4,7 @@
 
 Small read-only command-line tool for analysing software delivery using Jira Server/Data Center and GitHub evidence.
 
-Current version: `1.0.0`
+Current version: `1.0.1`
 
 It answers one practical question:
 
@@ -51,7 +51,7 @@ Generated raw data and processed reports can contain confidential Jira/GitHub co
 
 ## Version
 
-This repository is at `1.0.0`, the first usable CLI version. See [CHANGELOG.md](CHANGELOG.md) for the v1 scope.
+This repository is at `1.0.1`, the first usable CLI version with security hardening updates. See [CHANGELOG.md](CHANGELOG.md) for the v1 scope.
 
 ## Discovery Workflow
 

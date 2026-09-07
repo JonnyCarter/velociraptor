@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.1 - Security Hardening
+
+- Sanitised local cache filenames derived from Jira project keys and GitHub repository names.
+- URL-encoded Jira path parameters for project, version, status, and issue remote-link requests.
+- Added a CLI warning when `JIRA_VERIFY_SSL=false` disables TLS certificate verification.
+
 ## 1.0.0 - First Usable Version
 
 This is the first usable command-line release of Delivery Archaeology.

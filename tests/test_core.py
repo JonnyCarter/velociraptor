@@ -12,15 +12,16 @@ from delivery_archaeology.art import VELOCIRAPTOR
 from delivery_archaeology.config import JiraSettings, StatusMapping, load_env_file
 from delivery_archaeology.data_management import cleanup_candidates, cleanup_summary, delete_candidates, format_bytes
 from delivery_archaeology.flow import reconstruct_issue, rework_loops
-from delivery_archaeology.github import GITHUB_SEARCH_ISSUE_KEY_CHUNK_SIZE, GhCliError, PR_LIST_FIELDS, filter_and_sort_repos, pr_list_args, pr_view_args
+from delivery_archaeology.github import GITHUB_SEARCH_ISSUE_KEY_CHUNK_SIZE, GhCliError, PR_LIST_FIELDS, cache_path_for_repo, filter_and_sort_repos, pr_list_args, pr_view_args
 from delivery_archaeology.github import infer_repos_from_search_results, search_prs_for_issue_keys
 from delivery_archaeology.inference import analyse_command_for_repos, extract_pr_urls, infer_repos_from_jira_development_links, issue_keys_for_repo_inference, repo_from_pr_url
-from delivery_archaeology.jira import covering_cache_path_for_projects, load_or_fetch_development_links, load_or_fetch_project_versions, search_payload, updated_since_jql
+from delivery_archaeology.jira import cache_path_for_project_versions, cache_path_for_projects, covering_cache_path_for_projects, load_or_fetch_development_links, load_or_fetch_project_versions, search_payload, updated_since_jql
 from delivery_archaeology.linking import keys_in_pr
 from delivery_archaeology.metrics import delivery_metrics, issue_flow_records, issue_mix_metrics, issue_review_candidates, pr_metrics, pr_review_candidates, release_metrics
 from delivery_archaeology.normalize import JiraChange, JiraIssue, PullRequest
 from delivery_archaeology.processed import current_command, payload_with_run_metadata, text_with_run_metadata, write_processed_report
 from delivery_archaeology.serialization import analysis_payload, compare_payload, repo_inference_payload, to_pretty_json
+from delivery_archaeology.storage import safe_cache_slug
 
 
 def test_status_mapping_reports_unknowns() -> None:
@@ -86,6 +87,32 @@ def test_jira_covering_cache_uses_smallest_matching_superset(tmp_path, monkeypat
     (tmp_path / "issues_PAY_180d.json").write_text("[]")
     (tmp_path / "issues_PAY_30d.json").write_text("[]")
     assert covering_cache_path_for_projects(["PAY"], 14) == tmp_path / "issues_PAY_30d.json"
+
+
+def test_cache_paths_sanitize_user_supplied_names(tmp_path, monkeypatch) -> None:
+    import delivery_archaeology.github as github
+    import delivery_archaeology.jira as jira
+
+    monkeypatch.setattr(jira, "RAW_JIRA_DIR", tmp_path / "jira")
+    monkeypatch.setattr(github, "RAW_GITHUB_DIR", tmp_path / "github")
+
+    jira_path = cache_path_for_projects(["PAY/../../secret"], 180)
+    versions_path = cache_path_for_project_versions("PAY/../../secret")
+    github_path = cache_path_for_repo("../owner/repo/../../secret", 180)
+
+    assert (tmp_path / "jira") in jira_path.parents
+    assert (tmp_path / "jira") in versions_path.parents
+    assert (tmp_path / "github") in github_path.parents
+    assert ".." not in jira_path.name
+    assert ".." not in versions_path.name
+    assert ".." not in github_path.name
+
+
+def test_safe_cache_slug_preserves_normal_names_and_hashes_unsafe_names() -> None:
+    assert safe_cache_slug("PAY") == "PAY"
+    unsafe = safe_cache_slug("PAY/../../secret")
+    assert unsafe.startswith("PAY-secret-")
+    assert "/" not in unsafe
 
 
 def test_development_link_progress_counts_uncached_issues(tmp_path, monkeypatch) -> None:

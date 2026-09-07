@@ -5,10 +5,12 @@ import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import quote
 
 import httpx
 
 from delivery_archaeology.config import JiraSettings, RAW_JIRA_DIR
+from delivery_archaeology.storage import safe_cache_slug
 
 
 ISSUE_FIELDS = ["*all"]
@@ -55,13 +57,13 @@ class JiraClient:
         return self._get("/rest/api/2/project")
 
     def project(self, key: str) -> dict[str, Any]:
-        return self._get(f"/rest/api/2/project/{key}")
+        return self._get(f"/rest/api/2/project/{quote(key, safe='')}")
 
     def project_versions(self, key: str) -> list[dict[str, Any]]:
-        return self._get(f"/rest/api/2/project/{key}/versions")
+        return self._get(f"/rest/api/2/project/{quote(key, safe='')}/versions")
 
     def statuses_for_project(self, key: str) -> list[str]:
-        data = self._get(f"/rest/api/2/project/{key}/statuses")
+        data = self._get(f"/rest/api/2/project/{quote(key, safe='')}/statuses")
         return sorted({
             status["name"]
             for issue_type in data
@@ -74,7 +76,7 @@ class JiraClient:
 
     def remote_links(self, issue_key: str) -> list[dict[str, Any]]:
         try:
-            return self._get(f"/rest/api/2/issue/{issue_key}/remotelink")
+            return self._get(f"/rest/api/2/issue/{quote(issue_key, safe='')}/remotelink")
         except JiraApiError as exc:
             if exc.status_code == 404:
                 return []
@@ -198,7 +200,7 @@ def _quote_project_key(project: str) -> str:
 
 
 def cache_path_for_projects(projects: list[str], days: int) -> Path:
-    slug = "_".join(sorted(projects))
+    slug = _join_safe_projects(projects)
     return RAW_JIRA_DIR / f"issues_{slug}_{days}d.json"
 
 
@@ -208,11 +210,11 @@ def cache_path_for_development_links(projects: list[str], days: int) -> Path:
 
 
 def cache_path_for_project_versions(project: str) -> Path:
-    return RAW_JIRA_DIR / f"versions_{project}.json"
+    return RAW_JIRA_DIR / f"versions_{safe_cache_slug(project)}.json"
 
 
 def covering_cache_path_for_projects(projects: list[str], days: int) -> Path | None:
-    slug = "_".join(sorted(projects))
+    slug = _join_safe_projects(projects)
     candidates: list[tuple[int, Path]] = []
     for path in RAW_JIRA_DIR.glob(f"issues_{slug}_*d.json"):
         match = re.fullmatch(rf"issues_{re.escape(slug)}_(\d+)d\.json", path.name)
@@ -376,4 +378,4 @@ def period_start(days: int) -> datetime:
 
 
 def _join_safe_projects(projects: list[str]) -> str:
-    return "_".join(sorted(projects))
+    return "_".join(sorted(safe_cache_slug(project) for project in projects))

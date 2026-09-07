@@ -32,13 +32,16 @@ app.add_typer(data_app, name="data")
 
 def jira_settings_or_exit() -> JiraSettings:
     try:
-        return JiraSettings.from_env()
+        settings = JiraSettings.from_env()
     except ValidationError as exc:
         messages = [str(error["msg"]).removeprefix("Value error, ") for error in exc.errors()]
         typer.echo("Jira configuration error:", err=True)
         for message in messages:
             typer.echo(f"  {message}", err=True)
         raise typer.Exit(2) from exc
+    if not settings.verify_ssl:
+        typer.echo("Warning: JIRA_VERIFY_SSL=false; TLS certificate verification is disabled.", err=True)
+    return settings
 
 
 def jira_api_error_or_exit(exc: JiraApiError) -> None:
