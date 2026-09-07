@@ -5,11 +5,12 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from pydantic import ValidationError
 
+from delivery_archaeology.analysis import analyse_window, comparison_rows, weekly_breakdown
 from delivery_archaeology.art import VELOCIRAPTOR
 from delivery_archaeology.config import JiraSettings, StatusMapping, load_env_file
 from delivery_archaeology.flow import reconstruct_issue, rework_loops
 from delivery_archaeology.github import PR_LIST_FIELDS, filter_and_sort_repos, pr_list_args, pr_view_args
-from delivery_archaeology.jira import search_payload, updated_since_jql
+from delivery_archaeology.jira import covering_cache_path_for_projects, search_payload, updated_since_jql
 from delivery_archaeology.linking import keys_in_pr
 from delivery_archaeology.metrics import delivery_metrics, issue_flow_records, issue_review_candidates, pr_metrics, pr_review_candidates
 from delivery_archaeology.normalize import JiraChange, JiraIssue, PullRequest
@@ -71,6 +72,15 @@ def test_jira_search_payload_uses_array_expand_for_server_compatibility() -> Non
     assert payload["fields"] == ["*all"]
 
 
+def test_jira_covering_cache_uses_smallest_matching_superset(tmp_path, monkeypatch) -> None:
+    import delivery_archaeology.jira as jira
+
+    monkeypatch.setattr(jira, "RAW_JIRA_DIR", tmp_path)
+    (tmp_path / "issues_PAY_180d.json").write_text("[]")
+    (tmp_path / "issues_PAY_30d.json").write_text("[]")
+    assert covering_cache_path_for_projects(["PAY"], 14) == tmp_path / "issues_PAY_30d.json"
+
+
 def test_github_list_query_avoids_nested_node_heavy_fields() -> None:
     args = pr_list_args("org/repo", "2026-01-01")
     fields = args[args.index("--json") + 1].split(",")
@@ -103,6 +113,38 @@ def test_filter_and_sort_repos_can_sort_by_name_and_include_archived() -> None:
     ]
     result = filter_and_sort_repos(repos, include_archived=True, sort="name")
     assert [repo["name"] for repo in result] == ["alpha", "zeta"]
+
+
+def test_analysis_window_and_comparison_rows_split_same_raw_data() -> None:
+    mapping = StatusMapping(states={"ready": ["Ready"], "development": ["In Progress"], "done": ["Done"]})
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    issues = [
+        JiraIssue(id="1", key="PAY-1", project="PAY", summary="Previous", status="Done", created=base, updated=base + timedelta(days=4), resolved=base + timedelta(days=4), changelog=[
+            JiraChange(issue_key="PAY-1", timestamp=base + timedelta(days=1), field="status", from_value="Ready", to_value="In Progress"),
+            JiraChange(issue_key="PAY-1", timestamp=base + timedelta(days=4), field="status", from_value="In Progress", to_value="Done"),
+        ]),
+        JiraIssue(id="2", key="PAY-2", project="PAY", summary="Current", status="Done", created=base + timedelta(days=7), updated=base + timedelta(days=10), resolved=base + timedelta(days=10), changelog=[
+            JiraChange(issue_key="PAY-2", timestamp=base + timedelta(days=8), field="status", from_value="Ready", to_value="In Progress"),
+            JiraChange(issue_key="PAY-2", timestamp=base + timedelta(days=10), field="status", from_value="In Progress", to_value="Done"),
+        ]),
+    ]
+    previous = analyse_window(issues=issues, prs=[], mapping=mapping, jira_url="https://jira.example", start=base, end=base + timedelta(days=7))
+    current = analyse_window(issues=issues, prs=[], mapping=mapping, jira_url="https://jira.example", start=base + timedelta(days=7), end=base + timedelta(days=14))
+    rows = comparison_rows(previous, current)
+    assert previous.completed_count == 1
+    assert current.completed_count == 1
+    assert rows[0]["metric"] == "Completed issues"
+
+
+def test_weekly_breakdown_uses_completed_issues_per_bucket() -> None:
+    mapping = StatusMapping(states={"ready": ["Ready"], "development": ["In Progress"], "done": ["Done"]})
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    issue = JiraIssue(id="1", key="PAY-1", project="PAY", summary="Done", status="Done", created=base, updated=base + timedelta(days=8), resolved=base + timedelta(days=8), changelog=[
+        JiraChange(issue_key="PAY-1", timestamp=base + timedelta(days=1), field="status", from_value="Ready", to_value="In Progress"),
+        JiraChange(issue_key="PAY-1", timestamp=base + timedelta(days=8), field="status", from_value="In Progress", to_value="Done"),
+    ])
+    rows = weekly_breakdown(issues=[issue], prs=[], mapping=mapping, start=base, end=base + timedelta(days=14))
+    assert [row["completed"] for row in rows] == [0, 1]
 
 
 def test_reconstruct_preserves_repeated_states_as_rework() -> None:

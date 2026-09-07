@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -171,6 +172,18 @@ def cache_path_for_projects(projects: list[str], days: int) -> Path:
     return RAW_JIRA_DIR / f"issues_{slug}_{days}d.json"
 
 
+def covering_cache_path_for_projects(projects: list[str], days: int) -> Path | None:
+    slug = "_".join(sorted(projects))
+    candidates: list[tuple[int, Path]] = []
+    for path in RAW_JIRA_DIR.glob(f"issues_{slug}_*d.json"):
+        match = re.fullmatch(rf"issues_{re.escape(slug)}_(\d+)d\.json", path.name)
+        if match and int(match.group(1)) >= days:
+            candidates.append((int(match.group(1)), path))
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda item: item[0])[0][1]
+
+
 def load_or_fetch_issues(
     client: JiraClient,
     projects: list[str],
@@ -182,6 +195,9 @@ def load_or_fetch_issues(
     path = cache_path_for_projects(projects, days)
     if path.exists() and not refresh:
         return json.loads(path.read_text())
+    covering_path = covering_cache_path_for_projects(projects, days)
+    if covering_path and not refresh:
+        return json.loads(covering_path.read_text())
     issues = client.search_all(updated_since_jql(projects, days), expand="changelog")
     path.write_text(json.dumps(issues, indent=2, sort_keys=True))
     return issues

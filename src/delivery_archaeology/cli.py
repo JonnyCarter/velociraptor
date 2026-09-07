@@ -1,21 +1,19 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 import typer
 from pydantic import ValidationError
 
+from delivery_archaeology.analysis import analyse_window, comparison_rows, weekly_breakdown
 from delivery_archaeology.art import VELOCIRAPTOR
 from delivery_archaeology.config import JiraSettings, StatusMapping
-from delivery_archaeology.findings import build_findings
 from delivery_archaeology.flow import blocked_days, cycle_time_days, reconstruct_issue, rework_loops
 from delivery_archaeology.github import GhCliError, filter_and_sort_repos, load_or_fetch_all_prs, relative_updated, repos_for_org
 from delivery_archaeology.jira import JiraApiError, JiraClient, inspect_project, load_or_fetch_issues, period_start
-from delivery_archaeology.linking import keys_in_pr, link_prs_to_issues
-from delivery_archaeology.metrics import delivery_metrics, issue_flow_records, issue_review_candidates, pr_metrics, pr_review_candidates
 from delivery_archaeology.normalize import normalize_jira_issues, normalize_prs
-from delivery_archaeology.reporting import render_analysis_report, render_issue
+from delivery_archaeology.reporting import render_analysis_report, render_compare_report, render_issue
 
 
 app = typer.Typer(help="Analyse software delivery flow from Jira and GitHub evidence.")
@@ -175,44 +173,86 @@ def analyse(
         gh_error_or_exit(exc)
     issues = normalize_jira_issues(raw_issues)
     prs = normalize_prs(raw_prs)
-    timelines = {issue.key: reconstruct_issue(issue, mapping) for issue in issues}
-    records = issue_flow_records(issues, timelines)
-    linked = link_prs_to_issues(prs)
-    completed_keys = {r.key for r in records if r.completed}
-    linked_completed = len([key for key in completed_keys if linked.get(key)])
-    link_coverage = linked_completed / len(completed_keys) * 100 if completed_keys else 0.0
-    pr_without_links = sum(1 for pr in prs if not keys_in_pr(pr))
-    statuses = {issue.status for issue in issues if issue.status}
-    statuses.update(change.to_value for issue in issues for change in issue.changelog if change.field.casefold() == "status" and change.to_value)
-    unknown_statuses = mapping.unknown_statuses(statuses)
-    missing_resolution_dates = sum(1 for issue in issues if (issue.status or "").casefold() in {"done", "closed", "released"} and issue.resolved is None)
-    delivery = delivery_metrics(records, timelines, days)
-    github = pr_metrics(prs)
-    findings = build_findings(
-        delivery,
-        github,
-        link_coverage=link_coverage,
-        unknown_statuses=unknown_statuses,
-        missing_resolution_dates=missing_resolution_dates,
-        pr_without_links=pr_without_links,
+    start = period_start(days)
+    end = datetime.now(UTC)
+    result = analyse_window(
+        issues=issues,
+        prs=prs,
+        mapping=mapping,
+        jira_url=settings.url,
+        start=start,
+        end=end,
     )
     typer.echo(render_analysis_report(
-        start=period_start(days),
-        end=datetime.now(UTC),
+        start=start,
+        end=end,
         jira_projects=jira_project,
         repos=repo,
-        delivery=delivery,
-        github=github,
-        jira_issue_count=len(issues),
-        completed_count=len(completed_keys),
-        linked_completed=linked_completed,
-        link_coverage=link_coverage,
-        unknown_statuses=unknown_statuses,
-        missing_resolution_dates=missing_resolution_dates,
-        pr_without_links=pr_without_links,
-        findings=findings,
-        issue_candidates=issue_review_candidates(issues, records, jira_url=settings.url),
-        pr_candidates=pr_review_candidates(prs),
+        delivery=result.delivery,
+        github=result.github,
+        jira_issue_count=result.jira_issue_count,
+        completed_count=result.completed_count,
+        linked_completed=result.linked_completed,
+        link_coverage=result.link_coverage,
+        unknown_statuses=result.unknown_statuses,
+        missing_resolution_dates=result.missing_resolution_dates,
+        pr_without_links=result.pr_without_links,
+        findings=result.findings,
+        issue_candidates=result.issue_candidates,
+        pr_candidates=result.pr_candidates,
+        weekly_rows=weekly_breakdown(issues=issues, prs=prs, mapping=mapping, start=start, end=end),
+    ))
+
+
+@app.command("compare")
+def compare(
+    jira_project: Annotated[list[str], typer.Option("--jira-project", "--project", help="Jira project key. Can be repeated.")],
+    repo: Annotated[list[str], typer.Option("--repo", help="GitHub repo as owner/name. Can be repeated.")],
+    days: Annotated[int, typer.Option(help="Current lookback window in days.")] = 7,
+    compare_days: Annotated[int, typer.Option("--compare", help="Previous comparison window in days.")] = 7,
+    refresh: Annotated[bool, typer.Option(help="Fetch fresh raw Jira and GitHub data.")] = False,
+) -> None:
+    mapping = StatusMapping.load()
+    settings = jira_settings_or_exit()
+    total_days = days + compare_days
+    client = JiraClient(settings)
+    try:
+        raw_issues = load_or_fetch_issues(client, jira_project, total_days, refresh=refresh)
+    except JiraApiError as exc:
+        jira_api_error_or_exit(exc)
+    finally:
+        client.close()
+    try:
+        raw_prs = load_or_fetch_all_prs(repo, total_days, refresh=refresh)
+    except GhCliError as exc:
+        gh_error_or_exit(exc)
+    issues = normalize_jira_issues(raw_issues)
+    prs = normalize_prs(raw_prs)
+    end = datetime.now(UTC)
+    current_start = end - timedelta(days=days)
+    previous_start = current_start - timedelta(days=compare_days)
+    previous = analyse_window(
+        issues=issues,
+        prs=prs,
+        mapping=mapping,
+        jira_url=settings.url,
+        start=previous_start,
+        end=current_start,
+    )
+    current = analyse_window(
+        issues=issues,
+        prs=prs,
+        mapping=mapping,
+        jira_url=settings.url,
+        start=current_start,
+        end=end,
+    )
+    typer.echo(render_compare_report(
+        jira_projects=jira_project,
+        repos=repo,
+        previous=previous,
+        current=current,
+        rows=comparison_rows(previous, current),
     ))
 
 

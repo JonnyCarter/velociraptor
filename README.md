@@ -98,6 +98,25 @@ Use `--refresh` to fetch fresh raw data instead of using local cache.
 
 Raw Jira responses are cached under `data/raw/jira/`. Raw GitHub PR JSON is cached under `data/raw/github/`.
 
+If a larger matching cache already exists, the CLI reuses it for smaller analyses. For example, a prior 180-day pull can support a 14-day comparison without another Jira or GitHub fetch.
+
+Compare the current period with the immediately preceding period:
+
+```bash
+uv run delivery compare \
+  --jira-project PAY \
+  --repo my-org/payments-api \
+  --days 7 \
+  --compare 7
+```
+
+This fetches or reuses one combined 14-day dataset, then splits it locally into:
+
+- current period: last 7 days;
+- previous period: the 7 days before that.
+
+The normal `analyse` report also includes a weekly breakdown across the selected period, so a 180-day analysis can show week-by-week movement without running explicit comparisons.
+
 ## What It Collects
 
 Jira issue fields include issue identity, project, issue type, summary, status, created/updated/resolved dates, priority, parent, epic-like fields where discoverable, assignee, labels, components, fix versions, and common custom numeric/text fields such as story points, sprint, and team/workstream where visible.

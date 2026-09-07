@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -130,11 +131,27 @@ def cache_path_for_repo(repo: str, days: int) -> Path:
     return RAW_GITHUB_DIR / owner / f"{name}_{days}d_prs.json"
 
 
+def covering_cache_path_for_repo(repo: str, days: int) -> Path | None:
+    owner, name = repo.split("/", 1)
+    repo_dir = RAW_GITHUB_DIR / owner
+    candidates: list[tuple[int, Path]] = []
+    for path in repo_dir.glob(f"{name}_*d_prs.json"):
+        match = re.fullmatch(rf"{re.escape(name)}_(\d+)d_prs\.json", path.name)
+        if match and int(match.group(1)) >= days:
+            candidates.append((int(match.group(1)), path))
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda item: item[0])[0][1]
+
+
 def load_or_fetch_prs(repo: str, days: int, *, refresh: bool) -> list[dict[str, Any]]:
     path = cache_path_for_repo(repo, days)
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists() and not refresh:
         return json.loads(path.read_text())
+    covering_path = covering_cache_path_for_repo(repo, days)
+    if covering_path and not refresh:
+        return json.loads(covering_path.read_text())
     since = (datetime.now(UTC) - timedelta(days=days)).date().isoformat()
     listed_prs = run_gh(pr_list_args(repo, since)) or []
     prs = []

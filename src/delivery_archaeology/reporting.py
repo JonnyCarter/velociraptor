@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from delivery_archaeology.findings import Finding
 from delivery_archaeology.flow import StateSegment
 from delivery_archaeology.metrics import ReviewCandidate
 from delivery_archaeology.normalize import JiraIssue, PullRequest
+
+if TYPE_CHECKING:
+    from delivery_archaeology.analysis import AnalysisResult
 
 
 def render_analysis_report(
@@ -26,6 +30,7 @@ def render_analysis_report(
     findings: list[Finding],
     issue_candidates: list[ReviewCandidate],
     pr_candidates: list[ReviewCandidate],
+    weekly_rows: list[dict[str, object]],
 ) -> str:
     lines = [
         "DELIVERY ANALYSIS",
@@ -108,6 +113,13 @@ def render_analysis_report(
     lines.extend(_render_candidates(pr_candidates))
     lines.extend([
         "",
+        "WEEKLY BREAKDOWN",
+        "================",
+        "",
+    ])
+    lines.extend(_render_weekly_rows(weekly_rows))
+    lines.extend([
+        "",
         "FINDINGS",
         "========",
         "",
@@ -123,6 +135,69 @@ def render_analysis_report(
             f"Interpretation: {finding.interpretation}",
             "",
         ])
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def render_compare_report(
+    *,
+    jira_projects: list[str],
+    repos: list[str],
+    previous: AnalysisResult,
+    current: AnalysisResult,
+    rows: list[dict[str, object]],
+) -> str:
+    lines = [
+        "DELIVERY COMPARISON",
+        "===================",
+        "",
+        "Current period:",
+        f"{current.start:%-d %B %Y} - {current.end:%-d %B %Y}",
+        "",
+        "Previous period:",
+        f"{previous.start:%-d %B %Y} - {previous.end:%-d %B %Y}",
+        "",
+        "Scope",
+        f"Jira projects: {', '.join(jira_projects)}",
+        "Repositories:",
+        *[f"  {repo}" for repo in repos],
+        "",
+        f"{'Metric':<28} {'Previous':>12} {'Current':>12} {'Change':>12}",
+        "-" * 67,
+    ]
+    for row in rows:
+        unit = str(row["unit"])
+        previous_value = row["previous"]
+        current_value = row["current"]
+        lines.append(
+            f"{str(row['metric']):<28} "
+            f"{_fmt_unit(previous_value, unit):>12} "
+            f"{_fmt_unit(current_value, unit):>12} "
+            f"{_fmt_change(previous_value, current_value, unit):>12}"
+        )
+    lines.extend([
+        "",
+        "Data quality",
+        "------------",
+        f"Previous unknown statuses:   {', '.join(sorted(previous.unknown_statuses)) if previous.unknown_statuses else 'none'}",
+        f"Current unknown statuses:    {', '.join(sorted(current.unknown_statuses)) if current.unknown_statuses else 'none'}",
+        f"Previous link coverage:      {previous.link_coverage:.1f}%",
+        f"Current link coverage:       {current.link_coverage:.1f}%",
+        "",
+    ])
+    sample_warning = _sample_warning(previous.completed_count, current.completed_count)
+    if sample_warning:
+        lines.extend(["Sample warning", "--------------", sample_warning, ""])
+    lines.extend([
+        "Comparison notes",
+        "----------------",
+        *_comparison_notes(previous, current),
+        "",
+        "Current review candidates",
+        "-------------------------",
+    ])
+    lines.extend(_render_candidates(current.issue_candidates[:5]))
+    lines.extend(["", "Current PR candidates", "---------------------"])
+    lines.extend(_render_candidates(current.pr_candidates[:5]))
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -171,6 +246,29 @@ def _fmt_pct(value: object) -> str:
     return f"{value:.1f}%"
 
 
+def _fmt_unit(value: object, unit: str) -> str:
+    if not isinstance(value, (int, float)):
+        return "n/a"
+    if unit == "days":
+        return f"{value:.1f}d"
+    if unit == "review_time":
+        return _fmt_review(value)
+    if unit == "percent":
+        return f"{value:.1f}%"
+    return f"{value:.0f}" if float(value).is_integer() else f"{value:.1f}"
+
+
+def _fmt_change(previous: object, current: object, unit: str) -> str:
+    if not isinstance(previous, (int, float)) or not isinstance(current, (int, float)):
+        return "n/a"
+    delta = current - previous
+    if unit == "percent":
+        return f"{delta:+.1f}pp"
+    if previous == 0:
+        return "n/a"
+    return f"{(delta / previous) * 100:+.0f}%"
+
+
 def _render_candidates(candidates: list[ReviewCandidate]) -> list[str]:
     if not candidates:
         return ["none"]
@@ -185,3 +283,68 @@ def _render_candidates(candidates: list[ReviewCandidate]) -> list[str]:
             "",
         ])
     return lines[:-1]
+
+
+def _render_weekly_rows(rows: list[dict[str, object]]) -> list[str]:
+    if not rows:
+        return ["none"]
+    lines = [f"{'Week':<23} {'Done':>6} {'Median':>8} {'P95':>8} {'Blocked':>9} {'PRs':>6}"]
+    for row in rows:
+        start = row["start"]
+        end = row["end"]
+        if not isinstance(start, datetime) or not isinstance(end, datetime):
+            continue
+        lines.append(
+            f"{start:%-d %b} - {end:%-d %b}".ljust(23)
+            + f" {int(row['completed']):>6}"
+            + f" {_fmt_unit(row['cycle_median'], 'days'):>8}"
+            + f" {_fmt_unit(row['cycle_p95'], 'days'):>8}"
+            + f" {_fmt_unit(row['blocked_percent'], 'percent'):>9}"
+            + f" {int(row['prs']):>6}"
+        )
+    return lines
+
+
+def _sample_warning(previous_count: int, current_count: int) -> str | None:
+    if previous_count < 10 or current_count < 10:
+        return "One or both periods have fewer than 10 completed issues. Treat percentile movement as directional, not definitive."
+    return None
+
+
+def _comparison_notes(previous: AnalysisResult, current: AnalysisResult) -> list[str]:
+    notes: list[str] = []
+    _add_directional_note(notes, "Completed work", previous.completed_count, current.completed_count, higher_is_bad=False)
+    _add_directional_note(notes, "P95 cycle time", previous.delivery.get("cycle_p95"), current.delivery.get("cycle_p95"), higher_is_bad=True)
+    _add_directional_note(notes, "Blocked-work exposure", previous.delivery.get("blocked_percent"), current.delivery.get("blocked_percent"), higher_is_bad=True, suffix="pp")
+    _add_directional_note(notes, "Median PR lifetime", previous.github.get("lifetime_median"), current.github.get("lifetime_median"), higher_is_bad=True)
+    _add_directional_note(notes, "Link coverage", previous.link_coverage, current.link_coverage, higher_is_bad=False, suffix="pp")
+    return notes or ["No material directional movement detected in the core metrics."]
+
+
+def _add_directional_note(
+    notes: list[str],
+    label: str,
+    previous: object,
+    current: object,
+    *,
+    higher_is_bad: bool,
+    suffix: str = "%",
+) -> None:
+    if not isinstance(previous, (int, float)) or not isinstance(current, (int, float)) or previous == current:
+        return
+    if suffix == "pp":
+        change = current - previous
+        if abs(change) < 5:
+            return
+        direction = "increased" if change > 0 else "decreased"
+        interpretation = "worse" if (change > 0) == higher_is_bad else "better"
+        notes.append(f"{label} {direction} by {abs(change):.1f} percentage points ({interpretation}).")
+        return
+    if previous == 0:
+        return
+    percent = (current - previous) / previous * 100
+    if abs(percent) < 20:
+        return
+    direction = "increased" if percent > 0 else "decreased"
+    interpretation = "worse" if (percent > 0) == higher_is_bad else "better"
+    notes.append(f"{label} {direction} by {abs(percent):.0f}% ({interpretation}).")
