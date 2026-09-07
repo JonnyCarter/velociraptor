@@ -4,13 +4,27 @@
 
 Small read-only command-line tool for analysing software delivery using Jira Server/Data Center and GitHub evidence.
 
-Current version: `1.0.1`
+Current version: `1.0.2`
 
 It answers one practical question:
 
 > Where did delivery time go, and what evidence points to the highest-leverage constraints in this team's delivery system?
 
-No dashboards, notebooks, developer rankings, productivity scores, commit leaderboards, or LOC productivity analysis are included.
+This project intentionally measures the delivery system, not individual developer productivity. No dashboards, notebooks, developer rankings, productivity scores, commit leaderboards, or LOC productivity analysis are included.
+
+## Philosophy
+
+Delivery Archaeology is built around a simple idea: software delivery problems usually live in the system of work, not in isolated individuals.
+
+The tool is intended to help engineering managers and teams:
+
+- measure systems, not people;
+- prefer evidence over intuition;
+- separate observation from interpretation;
+- use metrics to improve conversations, not assign blame;
+- make every finding explainable and reproducible.
+
+See [CODE_OF_ETHICS.md](CODE_OF_ETHICS.md) for the full project principles.
 
 ## Prerequisites
 
@@ -49,9 +63,13 @@ gh auth status
 
 Generated raw data and processed reports can contain confidential Jira/GitHub content. Read [PRIVACY.md](PRIVACY.md) before using this with real organisation data.
 
+## License
+
+This project is licensed under the [Apache License 2.0](LICENSE).
+
 ## Version
 
-This repository is at `1.0.1`, the first usable CLI version with security hardening updates. See [CHANGELOG.md](CHANGELOG.md) for the v1 scope.
+This repository is at `1.0.2`, the first usable CLI version with security, licensing, and ethics documentation updates. See [CHANGELOG.md](CHANGELOG.md) for the v1 scope.
 
 ## Discovery Workflow
 

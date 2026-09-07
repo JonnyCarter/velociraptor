@@ -1,10 +1,17 @@
 # Changelog
 
+## 1.0.2 - Licensing and Ethics Documentation
+
+- Added explicit Apache License 2.0 project metadata.
+- Added README guidance for the project philosophy and licensing.
+- Added a code of ethics for responsible system-level delivery analysis.
+
 ## 1.0.1 - Security Hardening
 
 - Sanitised local cache filenames derived from Jira project keys and GitHub repository names.
 - URL-encoded Jira path parameters for project, version, status, and issue remote-link requests.
 - Added a CLI warning when `JIRA_VERIFY_SSL=false` disables TLS certificate verification.
+- Added the Apache License 2.0 and a project code of ethics for responsible system-level use.
 
 ## 1.0.0 - First Usable Version
 
