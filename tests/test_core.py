@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -9,6 +10,7 @@ from pydantic import ValidationError
 from delivery_archaeology.analysis import analyse_window, comparison_rows, weekly_breakdown
 from delivery_archaeology.art import VELOCIRAPTOR
 from delivery_archaeology.config import JiraSettings, StatusMapping, load_env_file
+from delivery_archaeology.data_management import cleanup_candidates, cleanup_summary, delete_candidates, format_bytes
 from delivery_archaeology.flow import reconstruct_issue, rework_loops
 from delivery_archaeology.github import GITHUB_SEARCH_ISSUE_KEY_CHUNK_SIZE, GhCliError, PR_LIST_FIELDS, filter_and_sort_repos, pr_list_args, pr_view_args
 from delivery_archaeology.github import infer_repos_from_search_results, search_prs_for_issue_keys
@@ -361,6 +363,79 @@ def test_write_processed_report_uses_processed_directory_and_progress(tmp_path, 
     assert path.name == "20260101T123000Z_analyse-pay-my-org-payments-api-180.txt"
     assert path.read_text() == "report body\n"
     assert messages == [f"Wrote processed report: {path}"]
+
+
+def test_cleanup_candidates_find_generated_data_but_keep_gitkeep(tmp_path, monkeypatch) -> None:
+    import delivery_archaeology.data_management as data_management
+
+    raw_jira = tmp_path / "data" / "raw" / "jira"
+    raw_github = tmp_path / "data" / "raw" / "github"
+    processed = tmp_path / "data" / "processed"
+    raw_jira.mkdir(parents=True)
+    raw_github.mkdir(parents=True)
+    processed.mkdir(parents=True)
+    (raw_jira / ".gitkeep").write_text("")
+    (raw_jira / "issues_PAY_180d.json").write_text("{}")
+    (raw_github / "repo_180d_prs.json").write_text("[]")
+    (processed / "report.txt").write_text("report")
+
+    monkeypatch.setattr(data_management, "RAW_JIRA_DIR", raw_jira)
+    monkeypatch.setattr(data_management, "RAW_GITHUB_DIR", raw_github)
+    monkeypatch.setattr(data_management, "PROCESSED_DIR", processed)
+
+    candidates = cleanup_candidates()
+
+    assert sorted(candidate.path.name for candidate in candidates) == [
+        "issues_PAY_180d.json",
+        "repo_180d_prs.json",
+        "report.txt",
+    ]
+    assert cleanup_summary(candidates)["files"] == 3
+
+
+def test_cleanup_candidates_can_filter_by_age_and_type(tmp_path, monkeypatch) -> None:
+    import delivery_archaeology.data_management as data_management
+
+    raw_jira = tmp_path / "data" / "raw" / "jira"
+    raw_github = tmp_path / "data" / "raw" / "github"
+    processed = tmp_path / "data" / "processed"
+    raw_jira.mkdir(parents=True)
+    raw_github.mkdir(parents=True)
+    processed.mkdir(parents=True)
+    old_report = processed / "old.txt"
+    new_report = processed / "new.txt"
+    raw_cache = raw_jira / "issues_PAY_180d.json"
+    old_report.write_text("old")
+    new_report.write_text("new")
+    raw_cache.write_text("raw")
+    old_time = (datetime.now(UTC) - timedelta(days=40)).timestamp()
+    os.utime(old_report, (old_time, old_time))
+
+    monkeypatch.setattr(data_management, "RAW_JIRA_DIR", raw_jira)
+    monkeypatch.setattr(data_management, "RAW_GITHUB_DIR", raw_github)
+    monkeypatch.setattr(data_management, "PROCESSED_DIR", processed)
+
+    candidates = cleanup_candidates(older_than_days=30, include_raw=False, include_processed=True)
+
+    assert [candidate.path.name for candidate in candidates] == ["old.txt"]
+
+
+def test_delete_candidates_removes_only_listed_files(tmp_path) -> None:
+    delete_me = tmp_path / "delete.json"
+    keep_me = tmp_path / "keep.json"
+    delete_me.write_text("{}")
+    keep_me.write_text("{}")
+    candidate = type("Candidate", (), {"path": delete_me})()
+
+    delete_candidates([candidate])
+
+    assert not delete_me.exists()
+    assert keep_me.exists()
+
+
+def test_format_bytes_uses_readable_units() -> None:
+    assert format_bytes(20) == "20 B"
+    assert format_bytes(2048) == "2.0 KB"
 
 
 def test_weekly_breakdown_uses_completed_issues_per_bucket() -> None:

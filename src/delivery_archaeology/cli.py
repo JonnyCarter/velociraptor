@@ -9,6 +9,7 @@ from pydantic import ValidationError
 from delivery_archaeology.analysis import analyse_window, comparison_rows, weekly_breakdown
 from delivery_archaeology.art import VELOCIRAPTOR
 from delivery_archaeology.config import JiraSettings, StatusMapping
+from delivery_archaeology.data_management import cleanup_candidates, cleanup_summary, delete_candidates, format_bytes, relative_path
 from delivery_archaeology.flow import blocked_days, cycle_time_days, reconstruct_issue, rework_loops
 from delivery_archaeology.github import GhCliError, filter_and_sort_repos, load_or_fetch_all_prs, relative_updated, repos_for_org
 from delivery_archaeology.github import infer_repos_from_search_results, search_prs_for_issue_keys
@@ -23,8 +24,10 @@ from delivery_archaeology.serialization import analysis_payload, compare_payload
 app = typer.Typer(help="Analyse software delivery flow from Jira and GitHub evidence.")
 jira_app = typer.Typer(help="Jira discovery and extraction helpers.")
 github_app = typer.Typer(help="GitHub discovery and PR-flow helpers.")
+data_app = typer.Typer(help="Inspect and clean local generated data.")
 app.add_typer(jira_app, name="jira")
 app.add_typer(github_app, name="github")
+app.add_typer(data_app, name="data")
 
 
 def jira_settings_or_exit() -> JiraSettings:
@@ -64,6 +67,49 @@ def validate_output_format(output_format: str) -> str:
 
 def progress(message: str) -> None:
     typer.echo(f"[delivery] {message}", err=True)
+
+
+@data_app.command("cleanup")
+def data_cleanup(
+    older_than_days: Annotated[int | None, typer.Option("--older-than-days", help="Only include generated files older than this many days.")] = None,
+    include_raw: Annotated[bool, typer.Option("--raw/--no-raw", help="Include raw Jira/GitHub API caches.")] = True,
+    include_processed: Annotated[bool, typer.Option("--processed/--no-processed", help="Include processed report files.")] = True,
+    yes: Annotated[bool, typer.Option("--yes", help="Delete the listed files. Without this flag the command is a dry run.")] = False,
+) -> None:
+    candidates = cleanup_candidates(
+        older_than_days=older_than_days,
+        include_raw=include_raw,
+        include_processed=include_processed,
+    )
+    summary = cleanup_summary(candidates)
+    mode = "DELETE" if yes else "DRY RUN"
+    typer.echo("LOCAL DATA CLEANUP")
+    typer.echo("==================")
+    typer.echo("")
+    typer.echo(f"Mode:             {mode}")
+    typer.echo(f"Files matched:    {summary['files']}")
+    typer.echo(f"Total size:       {format_bytes(summary['bytes'])}")
+    if older_than_days is not None:
+        typer.echo(f"Older than days:  {older_than_days}")
+    typer.echo("")
+    if not candidates:
+        typer.echo("No generated data files matched.")
+        return
+    typer.echo(f"{'SIZE':>10}  MODIFIED UTC          PATH")
+    typer.echo("-" * 72)
+    for candidate in candidates:
+        typer.echo(
+            f"{format_bytes(candidate.size_bytes):>10}  "
+            f"{candidate.modified_at:%Y-%m-%d %H:%M}  "
+            f"{relative_path(candidate.path)}"
+        )
+    if not yes:
+        typer.echo("")
+        typer.echo("No files deleted. Re-run with --yes to delete the listed files.")
+        return
+    delete_candidates(candidates)
+    typer.echo("")
+    typer.echo(f"Deleted {summary['files']} generated data files.")
 
 
 @jira_app.command("test")

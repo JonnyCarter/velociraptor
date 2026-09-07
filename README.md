@@ -10,6 +10,13 @@ It answers one practical question:
 
 No dashboards, notebooks, developer rankings, productivity scores, commit leaderboards, or LOC productivity analysis are included.
 
+## Prerequisites
+
+- Python 3.12 or newer.
+- `uv` for dependency management. Install it using the official Astral instructions: <https://docs.astral.sh/uv/getting-started/installation/>.
+- GitHub CLI, `gh`, for GitHub authentication and PR extraction. Install it using the official GitHub CLI instructions: <https://github.com/cli/cli#installation>.
+- Jira Server/Data Center credentials with read access to the projects being analysed.
+
 ## Install
 
 ```bash
@@ -35,6 +42,10 @@ GitHub authentication uses the installed GitHub CLI:
 gh auth login
 gh auth status
 ```
+
+## Privacy
+
+Generated raw data and processed reports can contain confidential Jira/GitHub content. Read [PRIVACY.md](PRIVACY.md) before using this with real organisation data.
 
 ## Discovery Workflow
 
@@ -84,6 +95,18 @@ Optional mascot:
 
 ```bash
 uv run delivery raptor
+```
+
+Inspect local generated data before cleanup:
+
+```bash
+uv run delivery data cleanup
+```
+
+Delete the listed generated data files:
+
+```bash
+uv run delivery data cleanup --yes
 ```
 
 ## Analyse

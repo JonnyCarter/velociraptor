@@ -66,4 +66,6 @@ Progress messages are written to stderr. JSON reports are written to stdout and 
 
 Report-producing commands write a processed copy under `data/processed/`. Text copies include the command and UTC run time in a metadata header. JSON copies include the same values in the top-level `run` object.
 
+Generated data can contain confidential Jira and GitHub content. Review `PRIVACY.md` before sharing output, and use `uv run delivery data cleanup` to inspect local generated files before deleting them with `--yes`.
+
 For management summaries, distinguish evidence from interpretation. Prefer phrasing like "blocked issues had 3.1x higher median cycle time" over claims about team efficiency.
