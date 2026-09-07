@@ -17,6 +17,7 @@ from delivery_archaeology.jira import covering_cache_path_for_projects, load_or_
 from delivery_archaeology.linking import keys_in_pr
 from delivery_archaeology.metrics import delivery_metrics, issue_flow_records, issue_review_candidates, pr_metrics, pr_review_candidates
 from delivery_archaeology.normalize import JiraChange, JiraIssue, PullRequest
+from delivery_archaeology.processed import current_command, payload_with_run_metadata, text_with_run_metadata, write_processed_report
 from delivery_archaeology.serialization import analysis_payload, compare_payload, repo_inference_payload, to_pretty_json
 
 
@@ -317,6 +318,49 @@ def test_repo_inference_payload_is_json_serializable() -> None:
         source="Jira development links",
     )
     assert '"report_type": "repository_inference"' in to_pretty_json(payload)
+
+
+def test_processed_text_report_includes_command_and_run_time() -> None:
+    run_at = datetime(2026, 1, 1, 12, 30, tzinfo=UTC)
+    report = text_with_run_metadata("DELIVERY ANALYSIS\n", command="delivery analyse --jira-project PAY", run_at=run_at)
+    assert "Command: delivery analyse --jira-project PAY" in report
+    assert "Run at:  2026-01-01T12:30:00+00:00" in report
+    assert "DELIVERY ANALYSIS" in report
+
+
+def test_json_payload_can_include_run_metadata() -> None:
+    run_at = datetime(2026, 1, 1, 12, 30, tzinfo=UTC)
+    payload = payload_with_run_metadata({"report_type": "delivery_analysis"}, command="delivery analyse", run_at=run_at)
+    assert payload["run"]["command"] == "delivery analyse"
+    assert payload["run"]["run_at"] == "2026-01-01T12:30:00+00:00"
+
+
+def test_current_command_quotes_arguments() -> None:
+    assert current_command(["/tmp/.venv/bin/delivery", "analyse", "--repo", "my org/payments api"]) == (
+        "delivery analyse --repo 'my org/payments api'"
+    )
+
+
+def test_write_processed_report_uses_processed_directory_and_progress(tmp_path, monkeypatch) -> None:
+    import delivery_archaeology.processed as processed
+
+    run_at = datetime(2026, 1, 1, 12, 30, tzinfo=UTC)
+    messages: list[str] = []
+    monkeypatch.setattr(processed, "PROCESSED_DIR", tmp_path)
+
+    path = write_processed_report(
+        report_name="analyse",
+        content="report body\n",
+        output_format="text",
+        command="delivery analyse --jira-project PAY --repo my-org/payments-api --days 180",
+        run_at=run_at,
+        progress=messages.append,
+    )
+
+    assert path.parent == tmp_path
+    assert path.name == "20260101T123000Z_analyse-pay-my-org-payments-api-180.txt"
+    assert path.read_text() == "report body\n"
+    assert messages == [f"Wrote processed report: {path}"]
 
 
 def test_weekly_breakdown_uses_completed_issues_per_bucket() -> None:

@@ -12,6 +12,7 @@ ROOT = Path.cwd()
 DEFAULT_STATUS_MAPPING = ROOT / "config" / "status_mapping.yaml"
 RAW_JIRA_DIR = ROOT / "data" / "raw" / "jira"
 RAW_GITHUB_DIR = ROOT / "data" / "raw" / "github"
+PROCESSED_DIR = ROOT / "data" / "processed"
 
 
 class JiraSettings(BaseModel):

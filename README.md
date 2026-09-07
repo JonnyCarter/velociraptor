@@ -1,3 +1,5 @@
+![Delivery Archaeology velociraptor](Velociraptor.png)
+
 # Delivery Archaeology
 
 Small read-only command-line tool for analysing software delivery using Jira Server/Data Center and GitHub evidence.
@@ -133,6 +135,8 @@ The normal `analyse` report also includes a weekly breakdown across the selected
 
 Use `--format json` on `analyse`, `compare`, and `infer-repos` when another tool or AI agent will consume the output. Progress messages are written to stderr, so stdout remains parseable JSON.
 
+Report-producing commands also write a processed copy under `data/processed/`. Text reports include a metadata header with the command used and UTC run time. JSON reports include the same information under the top-level `run` key.
+
 Long-running commands print progress to stderr, for example:
 
 ```text
@@ -141,6 +145,7 @@ Long-running commands print progress to stderr, for example:
 [delivery] Processing GitHub repo 1/2: my-org/payments-api
 [delivery] GitHub PR details fetched for my-org/payments-api: 25/514
 [delivery] Reconstructing delivery timelines and calculating metrics
+[delivery] Wrote processed report: data/processed/20260907T143000Z_analyse-pay-my-org-payments-api-180.txt
 ```
 
 Agent instructions are available in `skills/delivery-archaeology/SKILL.md`.

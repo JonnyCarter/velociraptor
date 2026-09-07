@@ -13,8 +13,9 @@ from delivery_archaeology.flow import blocked_days, cycle_time_days, reconstruct
 from delivery_archaeology.github import GhCliError, filter_and_sort_repos, load_or_fetch_all_prs, relative_updated, repos_for_org
 from delivery_archaeology.github import infer_repos_from_search_results, search_prs_for_issue_keys
 from delivery_archaeology.inference import analyse_command_for_repos, infer_repos_from_jira_development_links, issue_keys_for_repo_inference
-from delivery_archaeology.jira import JiraApiError, JiraClient, inspect_project, load_or_fetch_development_links, load_or_fetch_issues, period_start
+from delivery_archaeology.jira import JiraApiError, JiraClient, inspect_project, load_or_fetch_development_links, load_or_fetch_issues
 from delivery_archaeology.normalize import normalize_jira_issues, normalize_prs
+from delivery_archaeology.processed import current_command, payload_with_run_metadata, text_with_run_metadata, write_processed_report
 from delivery_archaeology.reporting import render_analysis_report, render_compare_report, render_issue, render_repo_inference_report
 from delivery_archaeology.serialization import analysis_payload, compare_payload, repo_inference_payload, to_pretty_json
 
@@ -175,6 +176,8 @@ def analyse(
     output_format: Annotated[str, typer.Option("--format", help="Output format: text or json.")] = "text",
 ) -> None:
     output_format = validate_output_format(output_format)
+    run_at = datetime.now(UTC)
+    run_command = current_command()
     mapping = StatusMapping.load()
     settings = jira_settings_or_exit()
     client = JiraClient(settings)
@@ -191,8 +194,8 @@ def analyse(
     issues = normalize_jira_issues(raw_issues)
     prs = normalize_prs(raw_prs)
     progress(f"Normalised {len(issues)} Jira issues and {len(prs)} GitHub PRs")
-    start = period_start(days)
-    end = datetime.now(UTC)
+    end = run_at
+    start = end - timedelta(days=days)
     progress("Reconstructing delivery timelines and calculating metrics")
     result = analyse_window(
         issues=issues,
@@ -205,14 +208,28 @@ def analyse(
     progress("Building weekly breakdown")
     weekly_rows = weekly_breakdown(issues=issues, prs=prs, mapping=mapping, start=start, end=end)
     if output_format == "json":
-        typer.echo(to_pretty_json(analysis_payload(
-            result=result,
-            jira_projects=jira_project,
-            repos=repo,
-            weekly_rows=weekly_rows,
-        )))
+        payload = payload_with_run_metadata(
+            analysis_payload(
+                result=result,
+                jira_projects=jira_project,
+                repos=repo,
+                weekly_rows=weekly_rows,
+            ),
+            command=run_command,
+            run_at=run_at,
+        )
+        report = to_pretty_json(payload)
+        write_processed_report(
+            report_name="analyse",
+            content=report,
+            output_format=output_format,
+            command=run_command,
+            run_at=run_at,
+            progress=progress,
+        )
+        typer.echo(report)
         return
-    typer.echo(render_analysis_report(
+    report = render_analysis_report(
         start=start,
         end=end,
         jira_projects=jira_project,
@@ -230,7 +247,16 @@ def analyse(
         issue_candidates=result.issue_candidates,
         pr_candidates=result.pr_candidates,
         weekly_rows=weekly_rows,
-    ))
+    )
+    write_processed_report(
+        report_name="analyse",
+        content=text_with_run_metadata(report, command=run_command, run_at=run_at),
+        output_format=output_format,
+        command=run_command,
+        run_at=run_at,
+        progress=progress,
+    )
+    typer.echo(report)
 
 
 @app.command("compare")
@@ -243,6 +269,8 @@ def compare(
     output_format: Annotated[str, typer.Option("--format", help="Output format: text or json.")] = "text",
 ) -> None:
     output_format = validate_output_format(output_format)
+    run_at = datetime.now(UTC)
+    run_command = current_command()
     mapping = StatusMapping.load()
     settings = jira_settings_or_exit()
     total_days = days + compare_days
@@ -260,7 +288,7 @@ def compare(
     issues = normalize_jira_issues(raw_issues)
     prs = normalize_prs(raw_prs)
     progress(f"Normalised {len(issues)} Jira issues and {len(prs)} GitHub PRs")
-    end = datetime.now(UTC)
+    end = run_at
     current_start = end - timedelta(days=days)
     previous_start = current_start - timedelta(days=compare_days)
     progress("Analysing previous comparison window")
@@ -283,21 +311,44 @@ def compare(
     )
     rows = comparison_rows(previous, current)
     if output_format == "json":
-        typer.echo(to_pretty_json(compare_payload(
-            previous=previous,
-            current=current,
-            jira_projects=jira_project,
-            repos=repo,
-            rows=rows,
-        )))
+        payload = payload_with_run_metadata(
+            compare_payload(
+                previous=previous,
+                current=current,
+                jira_projects=jira_project,
+                repos=repo,
+                rows=rows,
+            ),
+            command=run_command,
+            run_at=run_at,
+        )
+        report = to_pretty_json(payload)
+        write_processed_report(
+            report_name="compare",
+            content=report,
+            output_format=output_format,
+            command=run_command,
+            run_at=run_at,
+            progress=progress,
+        )
+        typer.echo(report)
         return
-    typer.echo(render_compare_report(
+    report = render_compare_report(
         jira_projects=jira_project,
         repos=repo,
         previous=previous,
         current=current,
         rows=rows,
-    ))
+    )
+    write_processed_report(
+        report_name="compare",
+        content=text_with_run_metadata(report, command=run_command, run_at=run_at),
+        output_format=output_format,
+        command=run_command,
+        run_at=run_at,
+        progress=progress,
+    )
+    typer.echo(report)
 
 
 @app.command("infer-repos")
@@ -313,6 +364,8 @@ def infer_repos(
     output_format: Annotated[str, typer.Option("--format", help="Output format: text or json.")] = "text",
 ) -> None:
     output_format = validate_output_format(output_format)
+    run_at = datetime.now(UTC)
+    run_command = current_command()
     settings = jira_settings_or_exit()
     client = JiraClient(settings)
     try:
@@ -363,31 +416,54 @@ def infer_repos(
     ][:max_repos]
     repos = [str(candidate["repository"]) for candidate in candidates]
     pr_match_count = sum(int(candidate["pr_count"]) for candidate in inferred) if source == "Jira development links" else len(search_results)
-    command = analyse_command_for_repos(jira_project, repos, days)
+    suggested_command = analyse_command_for_repos(jira_project, repos, days)
     if output_format == "json":
-        typer.echo(to_pretty_json(repo_inference_payload(
-            jira_projects=jira_project,
-            org=org,
-            days=days,
-            issue_key_count=len(issue_keys),
-            pr_match_count=pr_match_count,
-            candidates=candidates,
-            command=command,
-            min_prs=min_prs,
-            source=source,
-        )))
+        payload = payload_with_run_metadata(
+            repo_inference_payload(
+                jira_projects=jira_project,
+                org=org,
+                days=days,
+                issue_key_count=len(issue_keys),
+                pr_match_count=pr_match_count,
+                candidates=candidates,
+                command=suggested_command,
+                min_prs=min_prs,
+                source=source,
+            ),
+            command=run_command,
+            run_at=run_at,
+        )
+        report = to_pretty_json(payload)
+        write_processed_report(
+            report_name="infer-repos",
+            content=report,
+            output_format=output_format,
+            command=run_command,
+            run_at=run_at,
+            progress=progress,
+        )
+        typer.echo(report)
         return
-    typer.echo(render_repo_inference_report(
+    report = render_repo_inference_report(
         jira_projects=jira_project,
         org=org,
         days=days,
         issue_key_count=len(issue_keys),
         searched_pr_count=pr_match_count,
         candidates=candidates,
-        command=command,
+        command=suggested_command,
         min_prs=min_prs,
         source=source,
-    ))
+    )
+    write_processed_report(
+        report_name="infer-repos",
+        content=text_with_run_metadata(report, command=run_command, run_at=run_at),
+        output_format=output_format,
+        command=run_command,
+        run_at=run_at,
+        progress=progress,
+    )
+    typer.echo(report)
 
 
 @app.command("flow")
@@ -401,6 +477,8 @@ def flow(
 
 @app.command("issue")
 def issue(issue_key: str, days: Annotated[int, typer.Option()] = 365, refresh: Annotated[bool, typer.Option()] = False) -> None:
+    run_at = datetime.now(UTC)
+    command = current_command()
     project = issue_key.split("-", 1)[0]
     mapping = StatusMapping.load()
     client = JiraClient(jira_settings_or_exit())
@@ -416,7 +494,16 @@ def issue(issue_key: str, days: Annotated[int, typer.Option()] = 365, refresh: A
         typer.echo(f"Issue {issue_key} not found in cached/fetched project data.", err=True)
         raise typer.Exit(1)
     timeline = reconstruct_issue(found, mapping)
-    typer.echo(render_issue(found, timeline, [], cycle_time_days(timeline), blocked_days(timeline), rework_loops(timeline)))
+    report = render_issue(found, timeline, [], cycle_time_days(timeline), blocked_days(timeline), rework_loops(timeline))
+    write_processed_report(
+        report_name="issue",
+        content=text_with_run_metadata(report, command=command, run_at=run_at),
+        output_format="text",
+        command=command,
+        run_at=run_at,
+        progress=progress,
+    )
+    typer.echo(report)
 
 
 @app.command("epic")

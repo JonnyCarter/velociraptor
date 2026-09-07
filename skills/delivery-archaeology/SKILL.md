@@ -64,4 +64,6 @@ Raw data is cached under `data/raw/`. Use `--refresh` only when fresh source dat
 
 Progress messages are written to stderr. JSON reports are written to stdout and should remain parseable when stdout is captured separately.
 
+Report-producing commands write a processed copy under `data/processed/`. Text copies include the command and UTC run time in a metadata header. JSON copies include the same values in the top-level `run` object.
+
 For management summaries, distinguish evidence from interpretation. Prefer phrasing like "blocked issues had 3.1x higher median cycle time" over claims about team efficiency.
