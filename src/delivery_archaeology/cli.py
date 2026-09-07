@@ -11,9 +11,11 @@ from delivery_archaeology.art import VELOCIRAPTOR
 from delivery_archaeology.config import JiraSettings, StatusMapping
 from delivery_archaeology.flow import blocked_days, cycle_time_days, reconstruct_issue, rework_loops
 from delivery_archaeology.github import GhCliError, filter_and_sort_repos, load_or_fetch_all_prs, relative_updated, repos_for_org
-from delivery_archaeology.jira import JiraApiError, JiraClient, inspect_project, load_or_fetch_issues, period_start
+from delivery_archaeology.github import infer_repos_from_search_results, search_prs_for_issue_keys
+from delivery_archaeology.inference import analyse_command_for_repos, infer_repos_from_jira_development_links, issue_keys_for_repo_inference
+from delivery_archaeology.jira import JiraApiError, JiraClient, inspect_project, load_or_fetch_development_links, load_or_fetch_issues, period_start
 from delivery_archaeology.normalize import normalize_jira_issues, normalize_prs
-from delivery_archaeology.reporting import render_analysis_report, render_compare_report, render_issue
+from delivery_archaeology.reporting import render_analysis_report, render_compare_report, render_issue, render_repo_inference_report
 
 
 app = typer.Typer(help="Analyse software delivery flow from Jira and GitHub evidence.")
@@ -253,6 +255,75 @@ def compare(
         previous=previous,
         current=current,
         rows=comparison_rows(previous, current),
+    ))
+
+
+@app.command("infer-repos")
+def infer_repos(
+    jira_project: Annotated[list[str], typer.Option("--jira-project", "--project", help="Jira project key. Can be repeated.")],
+    org: Annotated[str | None, typer.Option("--org", help="GitHub organization to search if Jira has no linked PR evidence.")] = None,
+    days: Annotated[int, typer.Option(help="Lookback period in days.")] = 180,
+    max_issues: Annotated[int, typer.Option(help="Maximum recent Jira issue keys to search for.")] = 100,
+    min_prs: Annotated[int, typer.Option(help="Minimum matching PRs for a repo to be suggested.")] = 1,
+    max_repos: Annotated[int, typer.Option(help="Maximum repos to include in the suggested command.")] = 12,
+    issue_type: Annotated[list[str] | None, typer.Option("--issue-type", help="Optional Jira issue type filter. Can be repeated.")] = None,
+    refresh: Annotated[bool, typer.Option(help="Fetch fresh Jira data instead of using local cache.")] = False,
+) -> None:
+    settings = jira_settings_or_exit()
+    client = JiraClient(settings)
+    try:
+        raw_issues = load_or_fetch_issues(client, jira_project, days, refresh=refresh)
+    except JiraApiError as exc:
+        jira_api_error_or_exit(exc)
+    finally:
+        client.close()
+    issues = normalize_jira_issues(raw_issues)
+    issue_keys = issue_keys_for_repo_inference(
+        issues,
+        issue_types=issue_type,
+        max_issues=max_issues,
+    )
+    sampled_issue_keys = set(issue_keys)
+    sampled_issues = [issue for issue in issues if issue.key in sampled_issue_keys]
+    client = JiraClient(settings)
+    try:
+        development_links = load_or_fetch_development_links(
+            client,
+            sampled_issues,
+            jira_project,
+            days,
+            refresh=refresh,
+        )
+    except JiraApiError as exc:
+        jira_api_error_or_exit(exc)
+    finally:
+        client.close()
+    source = "Jira development links"
+    search_results = []
+    inferred = infer_repos_from_jira_development_links(development_links)
+    if not inferred and org:
+        source = "GitHub issue search fallback"
+        try:
+            search_results = search_prs_for_issue_keys(org, issue_keys, days=days)
+        except GhCliError as exc:
+            gh_error_or_exit(exc)
+        inferred = infer_repos_from_search_results(search_results, sampled_issue_keys)
+    candidates = [
+        candidate
+        for candidate in inferred
+        if int(candidate["pr_count"]) >= min_prs
+    ][:max_repos]
+    repos = [str(candidate["repository"]) for candidate in candidates]
+    typer.echo(render_repo_inference_report(
+        jira_projects=jira_project,
+        org=org,
+        days=days,
+        issue_key_count=len(issue_keys),
+        searched_pr_count=sum(int(candidate["pr_count"]) for candidate in inferred) if source == "Jira development links" else len(search_results),
+        candidates=candidates,
+        command=analyse_command_for_repos(jira_project, repos, days),
+        min_prs=min_prs,
+        source=source,
     ))
 
 

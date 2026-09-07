@@ -65,6 +65,18 @@ uv run delivery github repos MY-ORG --sort name
 uv run delivery github repos MY-ORG --include-archived
 ```
 
+Infer likely repositories from Jira issue keys:
+
+```bash
+uv run delivery infer-repos \
+  --jira-project PAY \
+  --days 180
+```
+
+This starts from recent Jira issues, reads Jira remote links and development-panel PR links, and prints candidate repositories plus a ready-to-run `delivery analyse` command. It does not infer ownership from developers or timestamps.
+
+If Jira has no linked PR evidence, pass `--org my-org` to allow a bounded GitHub issue-search fallback using the sampled Jira keys.
+
 Optional mascot:
 
 ```bash

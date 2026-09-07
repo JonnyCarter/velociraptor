@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from delivery_archaeology.config import RAW_GITHUB_DIR
+from delivery_archaeology.linking import ISSUE_KEY_RE
 
 
 PR_FIELDS = [
@@ -211,6 +212,62 @@ def load_or_fetch_all_prs(repos: list[str], days: int, *, refresh: bool) -> list
     return prs
 
 
+def search_prs_for_issue_keys(org: str, issue_keys: list[str], *, days: int, chunk_size: int = 8) -> list[dict[str, Any]]:
+    since = (datetime.now(UTC) - timedelta(days=days)).date().isoformat()
+    items: list[dict[str, Any]] = []
+    for chunk in _chunks(issue_keys, chunk_size):
+        key_query = " OR ".join(_quote_search_term(key) for key in chunk)
+        query = f"org:{org} is:pr updated:>={since} ({key_query})"
+        result = run_gh([
+            "api",
+            "-X",
+            "GET",
+            "search/issues",
+            "-f",
+            f"q={query}",
+            "-f",
+            "per_page=100",
+        ]) or {}
+        items.extend(result.get("items", []))
+    return _deduplicate_search_items(items)
+
+
+def infer_repos_from_search_results(items: list[dict[str, Any]], issue_keys: set[str]) -> list[dict[str, Any]]:
+    by_repo: dict[str, dict[str, Any]] = {}
+    for item in items:
+        repo = _repo_from_search_item(item)
+        if not repo:
+            continue
+        entry = by_repo.setdefault(repo, {
+            "repository": repo,
+            "pr_count": 0,
+            "issue_keys": set(),
+            "examples": [],
+        })
+        entry["pr_count"] += 1
+        text = "\n".join([item.get("title") or "", item.get("body") or ""])
+        keys = ISSUE_KEY_RE.findall(text)
+        entry["issue_keys"].update(key for key in keys if key in issue_keys)
+        if len(entry["examples"]) < 3:
+            entry["examples"].append({
+                "title": item.get("title") or "",
+                "url": item.get("html_url") or "",
+            })
+    return [
+        {
+            "repository": repo,
+            "pr_count": data["pr_count"],
+            "issue_count": len(data["issue_keys"]),
+            "issue_keys": sorted(data["issue_keys"]),
+            "examples": data["examples"],
+        }
+        for repo, data in sorted(
+            by_repo.items(),
+            key=lambda item: (-item[1]["pr_count"], -len(item[1]["issue_keys"]), item[0].casefold()),
+        )
+    ]
+
+
 def relative_updated(value: str | None) -> str:
     if not value:
         return ""
@@ -231,3 +288,35 @@ def _updated_sort_key(value: str | None) -> float:
     except ValueError:
         return float("inf")
     return -updated.timestamp()
+
+
+def _chunks(values: list[str], size: int) -> list[list[str]]:
+    return [values[index:index + size] for index in range(0, len(values), size)]
+
+
+def _quote_search_term(value: str) -> str:
+    return f'"{value}"'
+
+
+def _deduplicate_search_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    deduped: list[dict[str, Any]] = []
+    for item in items:
+        key = item.get("node_id") or item.get("html_url") or str(item.get("id"))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
+def _repo_from_search_item(item: dict[str, Any]) -> str | None:
+    repository_url = item.get("repository_url")
+    if repository_url:
+        return repository_url.rstrip("/").rsplit("/repos/", 1)[-1]
+    html_url = item.get("html_url")
+    if html_url:
+        parts = html_url.split("/")
+        if len(parts) >= 5:
+            return f"{parts[3]}/{parts[4]}"
+    return None

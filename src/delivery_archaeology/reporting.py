@@ -201,6 +201,67 @@ def render_compare_report(
     return "\n".join(lines).rstrip() + "\n"
 
 
+def render_repo_inference_report(
+    *,
+    jira_projects: list[str],
+    org: str | None,
+    days: int,
+    issue_key_count: int,
+    searched_pr_count: int,
+    candidates: list[dict[str, object]],
+    command: str,
+    min_prs: int,
+    source: str,
+) -> str:
+    lines = [
+        "REPOSITORY INFERENCE",
+        "====================",
+        "",
+        "Scope",
+        f"Jira projects: {', '.join(jira_projects)}",
+        f"GitHub org:    {org or 'not used'}",
+        f"Period:        last {days} days",
+        "",
+        "Evidence",
+        f"Source:                    {source}",
+        f"Jira issue keys searched:    {issue_key_count}",
+        f"PR links/matches found:      {searched_pr_count}",
+        f"Minimum PRs per repo:        {min_prs}",
+        "",
+        f"{'Repository':<36} {'PRs':>6} {'Issues':>8}",
+        "-" * 53,
+    ]
+    if not candidates:
+        lines.extend([
+            "none",
+            "",
+            "No repositories met the evidence threshold. If Jira has no development-link evidence, pass --org to allow the GitHub issue-search fallback.",
+        ])
+        return "\n".join(lines).rstrip() + "\n"
+    for candidate in candidates:
+        lines.append(
+            f"{str(candidate['repository']):<36} "
+            f"{int(candidate['pr_count']):>6} "
+            f"{int(candidate['issue_count']):>8}"
+        )
+    lines.extend(["", "Examples", "--------"])
+    for candidate in candidates[:5]:
+        examples = candidate.get("examples") or []
+        if not isinstance(examples, list) or not examples:
+            continue
+        lines.append(str(candidate["repository"]))
+        for example in examples[:2]:
+            if not isinstance(example, dict):
+                continue
+            title = example.get("title") or ""
+            url = example.get("url") or ""
+            lines.append(f"  - {title}")
+            if url:
+                lines.append(f"    {url}")
+    lines.extend(["", "Suggested command", "-----------------", command])
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def render_issue(issue: JiraIssue, timeline: list[StateSegment], prs: list[PullRequest], cycle_days: float | None, blocked_days: float, loops: int) -> str:
     lines = [f"{issue.key} - {issue.summary or ''}".rstrip(), ""]
     if issue.created:

@@ -68,6 +68,29 @@ class JiraClient:
     def fields(self) -> list[dict[str, Any]]:
         return self._get("/rest/api/2/field")
 
+    def remote_links(self, issue_key: str) -> list[dict[str, Any]]:
+        try:
+            return self._get(f"/rest/api/2/issue/{issue_key}/remotelink")
+        except JiraApiError as exc:
+            if exc.status_code == 404:
+                return []
+            raise
+
+    def dev_status_pull_requests(self, issue_id: str) -> dict[str, Any]:
+        try:
+            return self._get(
+                "/rest/dev-status/latest/issue/detail",
+                params={
+                    "issueId": issue_id,
+                    "applicationType": "github",
+                    "dataType": "pullrequest",
+                },
+            )
+        except JiraApiError as exc:
+            if exc.status_code == 404:
+                return {}
+            raise
+
     def search(
         self,
         jql: str,
@@ -103,8 +126,8 @@ class JiraClient:
                 return issues
             start += len(page["issues"])
 
-    def _get(self, path: str) -> Any:
-        response = self.client.get(path)
+    def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+        response = self.client.get(path, params=params)
         self._raise_for_status(response, "GET", path)
         return response.json()
 
@@ -172,6 +195,11 @@ def cache_path_for_projects(projects: list[str], days: int) -> Path:
     return RAW_JIRA_DIR / f"issues_{slug}_{days}d.json"
 
 
+def cache_path_for_development_links(projects: list[str], days: int) -> Path:
+    slug = _join_safe_projects(projects)
+    return RAW_JIRA_DIR / f"development_links_{slug}_{days}d.json"
+
+
 def covering_cache_path_for_projects(projects: list[str], days: int) -> Path | None:
     slug = "_".join(sorted(projects))
     candidates: list[tuple[int, Path]] = []
@@ -201,6 +229,42 @@ def load_or_fetch_issues(
     issues = client.search_all(updated_since_jql(projects, days), expand="changelog")
     path.write_text(json.dumps(issues, indent=2, sort_keys=True))
     return issues
+
+
+def load_or_fetch_development_links(
+    client: JiraClient,
+    issues: list[Any],
+    projects: list[str],
+    days: int,
+    *,
+    refresh: bool,
+) -> dict[str, dict[str, Any]]:
+    RAW_JIRA_DIR.mkdir(parents=True, exist_ok=True)
+    path = cache_path_for_development_links(projects, days)
+    requested_issue_keys = {issue.key for issue in issues}
+    if path.exists() and not refresh:
+        cached = json.loads(path.read_text())
+        if requested_issue_keys.issubset(cached.keys()):
+            return {key: cached[key] for key in requested_issue_keys}
+        data = cached
+    else:
+        data: dict[str, dict[str, Any]] = {}
+    for issue in issues:
+        if issue.key in data and not refresh:
+            continue
+        issue_key = issue.key
+        entry: dict[str, Any] = {"id": issue.id, "remote_links": [], "dev_status": {}, "errors": []}
+        try:
+            entry["remote_links"] = client.remote_links(issue_key)
+        except JiraApiError as exc:
+            entry["errors"].append(f"remote_links HTTP {exc.status_code}: {exc.detail}")
+        try:
+            entry["dev_status"] = client.dev_status_pull_requests(issue.id)
+        except JiraApiError as exc:
+            entry["errors"].append(f"dev_status HTTP {exc.status_code}: {exc.detail}")
+        data[issue_key] = entry
+    path.write_text(json.dumps(data, indent=2, sort_keys=True))
+    return data
 
 
 def inspect_project(client: JiraClient, project_key: str, days: int = 180) -> dict[str, Any]:
@@ -243,3 +307,7 @@ def inspect_project(client: JiraClient, project_key: str, days: int = 180) -> di
 
 def period_start(days: int) -> datetime:
     return datetime.now(UTC) - timedelta(days=days)
+
+
+def _join_safe_projects(projects: list[str]) -> str:
+    return "_".join(sorted(projects))

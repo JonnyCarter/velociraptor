@@ -10,6 +10,8 @@ from delivery_archaeology.art import VELOCIRAPTOR
 from delivery_archaeology.config import JiraSettings, StatusMapping, load_env_file
 from delivery_archaeology.flow import reconstruct_issue, rework_loops
 from delivery_archaeology.github import PR_LIST_FIELDS, filter_and_sort_repos, pr_list_args, pr_view_args
+from delivery_archaeology.github import infer_repos_from_search_results
+from delivery_archaeology.inference import analyse_command_for_repos, extract_pr_urls, infer_repos_from_jira_development_links, issue_keys_for_repo_inference, repo_from_pr_url
 from delivery_archaeology.jira import covering_cache_path_for_projects, search_payload, updated_since_jql
 from delivery_archaeology.linking import keys_in_pr
 from delivery_archaeology.metrics import delivery_metrics, issue_flow_records, issue_review_candidates, pr_metrics, pr_review_candidates
@@ -113,6 +115,74 @@ def test_filter_and_sort_repos_can_sort_by_name_and_include_archived() -> None:
     ]
     result = filter_and_sort_repos(repos, include_archived=True, sort="name")
     assert [repo["name"] for repo in result] == ["alpha", "zeta"]
+
+
+def test_issue_keys_for_repo_inference_uses_recent_non_epic_work() -> None:
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    issues = [
+        JiraIssue(id="1", key="PAY-1", project="PAY", issue_type="Epic", updated=base + timedelta(days=3)),
+        JiraIssue(id="2", key="PAY-2", project="PAY", issue_type="Story", updated=base + timedelta(days=2)),
+        JiraIssue(id="3", key="PAY-3", project="PAY", issue_type="Bug", updated=base + timedelta(days=4)),
+    ]
+    assert issue_keys_for_repo_inference(issues) == ["PAY-3", "PAY-2"]
+
+
+def test_infer_repos_from_search_results_counts_pr_and_issue_evidence() -> None:
+    items = [
+        {
+            "repository_url": "https://api.github.com/repos/my-org/payments-api",
+            "title": "PAY-1 add validation",
+            "body": "",
+            "html_url": "https://github.com/my-org/payments-api/pull/1",
+        },
+        {
+            "repository_url": "https://api.github.com/repos/my-org/payments-api",
+            "title": "PAY-2 fix capture",
+            "body": "",
+            "html_url": "https://github.com/my-org/payments-api/pull/2",
+        },
+        {
+            "repository_url": "https://api.github.com/repos/my-org/payments-web",
+            "title": "PAY-1 UI",
+            "body": "",
+            "html_url": "https://github.com/my-org/payments-web/pull/3",
+        },
+    ]
+    repos = infer_repos_from_search_results(items, {"PAY-1", "PAY-2"})
+    assert repos[0]["repository"] == "my-org/payments-api"
+    assert repos[0]["pr_count"] == 2
+    assert repos[0]["issue_count"] == 2
+
+
+def test_analyse_command_for_repos_prints_ready_to_run_command() -> None:
+    command = analyse_command_for_repos(["PAY"], ["my-org/payments-api", "my-org/payments-web"], 180)
+    assert "--jira-project PAY" in command
+    assert "--repo my-org/payments-api" in command
+    assert command.endswith("--days 180")
+
+
+def test_extract_pr_urls_from_jira_development_link_payloads() -> None:
+    payload = {
+        "remote_links": [{"object": {"url": "https://github.com/my-org/payments-api/pull/42"}}],
+        "dev_status": {"detail": [{"pullRequests": [{"url": "https://github.internal/my-org/payments-web/pull/9"}]}]},
+    }
+    assert extract_pr_urls(payload) == [
+        "https://github.com/my-org/payments-api/pull/42",
+        "https://github.internal/my-org/payments-web/pull/9",
+    ]
+    assert repo_from_pr_url("https://github.com/my-org/payments-api/pull/42") == "my-org/payments-api"
+
+
+def test_infer_repos_from_jira_development_links_counts_pr_links() -> None:
+    links = {
+        "PAY-1": {"remote_links": [{"object": {"url": "https://github.com/my-org/payments-api/pull/1"}}]},
+        "PAY-2": {"dev_status": {"detail": [{"pullRequests": [{"url": "https://github.com/my-org/payments-api/pull/2"}]}]}},
+        "PAY-3": {"remote_links": [{"object": {"url": "https://github.com/my-org/payments-web/pull/3"}}]},
+    }
+    repos = infer_repos_from_jira_development_links(links)
+    assert repos[0]["repository"] == "my-org/payments-api"
+    assert repos[0]["pr_count"] == 2
+    assert repos[0]["issue_count"] == 2
 
 
 def test_analysis_window_and_comparison_rows_split_same_raw_data() -> None:
