@@ -4,6 +4,8 @@
 
 Small read-only command-line tool for analysing software delivery using Jira Server/Data Center and GitHub evidence.
 
+Current version: `1.0.0`
+
 It answers one practical question:
 
 > Where did delivery time go, and what evidence points to the highest-leverage constraints in this team's delivery system?
@@ -46,6 +48,10 @@ gh auth status
 ## Privacy
 
 Generated raw data and processed reports can contain confidential Jira/GitHub content. Read [PRIVACY.md](PRIVACY.md) before using this with real organisation data.
+
+## Version
+
+This repository is at `1.0.0`, the first usable CLI version. See [CHANGELOG.md](CHANGELOG.md) for the v1 scope.
 
 ## Discovery Workflow
 
