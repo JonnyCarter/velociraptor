@@ -4,7 +4,7 @@ import json
 import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 
@@ -12,6 +12,7 @@ from delivery_archaeology.config import JiraSettings, RAW_JIRA_DIR
 
 
 ISSUE_FIELDS = ["*all"]
+Progress = Callable[[str], None] | None
 
 
 class JiraApiError(RuntimeError):
@@ -115,6 +116,7 @@ class JiraClient:
         *,
         fields: list[str] | None = None,
         expand: str | list[str] | None = None,
+        progress: Progress = None,
     ) -> list[dict[str, Any]]:
         issues: list[dict[str, Any]] = []
         start = 0
@@ -122,6 +124,8 @@ class JiraClient:
             page = self.search(jql, fields=fields, expand=expand, start_at=start)
             issues.extend(page.get("issues", []))
             total = int(page.get("total", len(issues)))
+            if progress:
+                progress(f"Jira issues fetched: {len(issues)}/{total}")
             if len(issues) >= total or not page.get("issues"):
                 return issues
             start += len(page["issues"])
@@ -218,16 +222,25 @@ def load_or_fetch_issues(
     days: int,
     *,
     refresh: bool,
+    progress: Progress = None,
 ) -> list[dict[str, Any]]:
     RAW_JIRA_DIR.mkdir(parents=True, exist_ok=True)
     path = cache_path_for_projects(projects, days)
     if path.exists() and not refresh:
+        if progress:
+            progress(f"Using Jira cache: {path}")
         return json.loads(path.read_text())
     covering_path = covering_cache_path_for_projects(projects, days)
     if covering_path and not refresh:
+        if progress:
+            progress(f"Using Jira covering cache: {covering_path}")
         return json.loads(covering_path.read_text())
-    issues = client.search_all(updated_since_jql(projects, days), expand="changelog")
+    if progress:
+        progress(f"Fetching Jira issues for {', '.join(projects)} over {days} days")
+    issues = client.search_all(updated_since_jql(projects, days), expand="changelog", progress=progress)
     path.write_text(json.dumps(issues, indent=2, sort_keys=True))
+    if progress:
+        progress(f"Wrote Jira cache: {path}")
     return issues
 
 
@@ -238,6 +251,7 @@ def load_or_fetch_development_links(
     days: int,
     *,
     refresh: bool,
+    progress: Progress = None,
 ) -> dict[str, dict[str, Any]]:
     RAW_JIRA_DIR.mkdir(parents=True, exist_ok=True)
     path = cache_path_for_development_links(projects, days)
@@ -245,13 +259,18 @@ def load_or_fetch_development_links(
     if path.exists() and not refresh:
         cached = json.loads(path.read_text())
         if requested_issue_keys.issubset(cached.keys()):
+            if progress:
+                progress(f"Using Jira development-link cache: {path}")
             return {key: cached[key] for key in requested_issue_keys}
         data = cached
     else:
         data: dict[str, dict[str, Any]] = {}
-    for issue in issues:
-        if issue.key in data and not refresh:
-            continue
+    missing_issues = [issue for issue in issues if refresh or issue.key not in data]
+    total = len(missing_issues)
+    fetched = 0
+    if progress and total:
+        progress(f"Fetching Jira development links for {total} issues")
+    for issue in missing_issues:
         issue_key = issue.key
         entry: dict[str, Any] = {"id": issue.id, "remote_links": [], "dev_status": {}, "errors": []}
         try:
@@ -263,7 +282,12 @@ def load_or_fetch_development_links(
         except JiraApiError as exc:
             entry["errors"].append(f"dev_status HTTP {exc.status_code}: {exc.detail}")
         data[issue_key] = entry
+        fetched += 1
+        if progress and (fetched == 1 or fetched % 10 == 0 or fetched == total):
+            progress(f"Jira development links fetched: {fetched}/{total}")
     path.write_text(json.dumps(data, indent=2, sort_keys=True))
+    if progress:
+        progress(f"Wrote Jira development-link cache: {path}")
     return data
 
 

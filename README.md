@@ -70,7 +70,8 @@ Infer likely repositories from Jira issue keys:
 ```bash
 uv run delivery infer-repos \
   --jira-project PAY \
-  --days 180
+  --days 180 \
+  --format json
 ```
 
 This starts from recent Jira issues, reads Jira remote links and development-panel PR links, and prints candidate repositories plus a ready-to-run `delivery analyse` command. It does not infer ownership from developers or timestamps.
@@ -119,7 +120,8 @@ uv run delivery compare \
   --jira-project PAY \
   --repo my-org/payments-api \
   --days 7 \
-  --compare 7
+  --compare 7 \
+  --format json
 ```
 
 This fetches or reuses one combined 14-day dataset, then splits it locally into:
@@ -128,6 +130,20 @@ This fetches or reuses one combined 14-day dataset, then splits it locally into:
 - previous period: the 7 days before that.
 
 The normal `analyse` report also includes a weekly breakdown across the selected period, so a 180-day analysis can show week-by-week movement without running explicit comparisons.
+
+Use `--format json` on `analyse`, `compare`, and `infer-repos` when another tool or AI agent will consume the output. Progress messages are written to stderr, so stdout remains parseable JSON.
+
+Long-running commands print progress to stderr, for example:
+
+```text
+[delivery] Fetching Jira issues for PAY over 180 days
+[delivery] Jira issues fetched: 100/842
+[delivery] Processing GitHub repo 1/2: my-org/payments-api
+[delivery] GitHub PR details fetched for my-org/payments-api: 25/514
+[delivery] Reconstructing delivery timelines and calculating metrics
+```
+
+Agent instructions are available in `skills/delivery-archaeology/SKILL.md`.
 
 ## What It Collects
 

@@ -5,10 +5,13 @@ import re
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from delivery_archaeology.config import RAW_GITHUB_DIR
 from delivery_archaeology.linking import ISSUE_KEY_RE
+
+
+Progress = Callable[[str], None] | None
 
 
 PR_FIELDS = [
@@ -145,23 +148,36 @@ def covering_cache_path_for_repo(repo: str, days: int) -> Path | None:
     return sorted(candidates, key=lambda item: item[0])[0][1]
 
 
-def load_or_fetch_prs(repo: str, days: int, *, refresh: bool) -> list[dict[str, Any]]:
+def load_or_fetch_prs(repo: str, days: int, *, refresh: bool, progress: Progress = None) -> list[dict[str, Any]]:
     path = cache_path_for_repo(repo, days)
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists() and not refresh:
+        if progress:
+            progress(f"Using GitHub cache: {path}")
         return json.loads(path.read_text())
     covering_path = covering_cache_path_for_repo(repo, days)
     if covering_path and not refresh:
+        if progress:
+            progress(f"Using GitHub covering cache: {covering_path}")
         return json.loads(covering_path.read_text())
     since = (datetime.now(UTC) - timedelta(days=days)).date().isoformat()
+    if progress:
+        progress(f"Listing GitHub PRs for {repo} updated since {since}")
     listed_prs = run_gh(pr_list_args(repo, since)) or []
+    if progress:
+        progress(f"GitHub PRs listed for {repo}: {len(listed_prs)}")
     prs = []
-    for listed_pr in listed_prs:
+    total = len(listed_prs)
+    for index, listed_pr in enumerate(listed_prs, start=1):
         number = int(listed_pr["number"])
         pr = fetch_pr_detail(repo, number)
         pr["repository"] = repo
         prs.append(pr)
+        if progress and (index == 1 or index % 25 == 0 or index == total):
+            progress(f"GitHub PR details fetched for {repo}: {index}/{total}")
     path.write_text(json.dumps(prs, indent=2, sort_keys=True))
+    if progress:
+        progress(f"Wrote GitHub cache: {path}")
     return prs
 
 
@@ -205,17 +221,24 @@ def fetch_pr_detail(repo: str, number: int) -> dict[str, Any]:
         return fallback
 
 
-def load_or_fetch_all_prs(repos: list[str], days: int, *, refresh: bool) -> list[dict[str, Any]]:
+def load_or_fetch_all_prs(repos: list[str], days: int, *, refresh: bool, progress: Progress = None) -> list[dict[str, Any]]:
     prs: list[dict[str, Any]] = []
-    for repo in repos:
-        prs.extend(load_or_fetch_prs(repo, days, refresh=refresh))
+    if progress and not repos:
+        progress("No GitHub repositories supplied; skipping PR collection")
+    for index, repo in enumerate(repos, start=1):
+        if progress:
+            progress(f"Processing GitHub repo {index}/{len(repos)}: {repo}")
+        prs.extend(load_or_fetch_prs(repo, days, refresh=refresh, progress=progress))
     return prs
 
 
-def search_prs_for_issue_keys(org: str, issue_keys: list[str], *, days: int, chunk_size: int = 8) -> list[dict[str, Any]]:
+def search_prs_for_issue_keys(org: str, issue_keys: list[str], *, days: int, chunk_size: int = 8, progress: Progress = None) -> list[dict[str, Any]]:
     since = (datetime.now(UTC) - timedelta(days=days)).date().isoformat()
     items: list[dict[str, Any]] = []
-    for chunk in _chunks(issue_keys, chunk_size):
+    chunks = _chunks(issue_keys, chunk_size)
+    for index, chunk in enumerate(chunks, start=1):
+        if progress:
+            progress(f"GitHub fallback search chunk {index}/{len(chunks)}")
         key_query = " OR ".join(_quote_search_term(key) for key in chunk)
         query = f"org:{org} is:pr updated:>={since} ({key_query})"
         result = run_gh([

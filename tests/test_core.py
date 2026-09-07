@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -12,10 +13,11 @@ from delivery_archaeology.flow import reconstruct_issue, rework_loops
 from delivery_archaeology.github import PR_LIST_FIELDS, filter_and_sort_repos, pr_list_args, pr_view_args
 from delivery_archaeology.github import infer_repos_from_search_results
 from delivery_archaeology.inference import analyse_command_for_repos, extract_pr_urls, infer_repos_from_jira_development_links, issue_keys_for_repo_inference, repo_from_pr_url
-from delivery_archaeology.jira import covering_cache_path_for_projects, search_payload, updated_since_jql
+from delivery_archaeology.jira import covering_cache_path_for_projects, load_or_fetch_development_links, search_payload, updated_since_jql
 from delivery_archaeology.linking import keys_in_pr
 from delivery_archaeology.metrics import delivery_metrics, issue_flow_records, issue_review_candidates, pr_metrics, pr_review_candidates
 from delivery_archaeology.normalize import JiraChange, JiraIssue, PullRequest
+from delivery_archaeology.serialization import analysis_payload, compare_payload, repo_inference_payload, to_pretty_json
 
 
 def test_status_mapping_reports_unknowns() -> None:
@@ -81,6 +83,39 @@ def test_jira_covering_cache_uses_smallest_matching_superset(tmp_path, monkeypat
     (tmp_path / "issues_PAY_180d.json").write_text("[]")
     (tmp_path / "issues_PAY_30d.json").write_text("[]")
     assert covering_cache_path_for_projects(["PAY"], 14) == tmp_path / "issues_PAY_30d.json"
+
+
+def test_development_link_progress_counts_uncached_issues(tmp_path, monkeypatch) -> None:
+    import delivery_archaeology.jira as jira
+
+    class FakeClient:
+        def remote_links(self, issue_key: str) -> list[dict[str, object]]:
+            return [{"object": {"url": f"https://github.example/org/repo/pull/{issue_key[-1]}"}}]
+
+        def dev_status_pull_requests(self, issue_id: str) -> dict[str, object]:
+            return {"issueId": issue_id}
+
+    monkeypatch.setattr(jira, "RAW_JIRA_DIR", tmp_path)
+    cache = tmp_path / "development_links_PAY_180d.json"
+    cache.write_text(json.dumps({"PAY-1": {"id": "1", "remote_links": [], "dev_status": {}, "errors": []}}))
+    messages: list[str] = []
+    issues = [
+        JiraIssue(id="1", key="PAY-1", project="PAY", updated=datetime(2026, 1, 1, tzinfo=UTC)),
+        JiraIssue(id="2", key="PAY-2", project="PAY", updated=datetime(2026, 1, 2, tzinfo=UTC)),
+    ]
+
+    result = load_or_fetch_development_links(
+        FakeClient(),
+        issues,
+        ["PAY"],
+        180,
+        refresh=False,
+        progress=messages.append,
+    )
+
+    assert "Fetching Jira development links for 1 issues" in messages
+    assert "Jira development links fetched: 1/1" in messages
+    assert set(result) == {"PAY-1", "PAY-2"}
 
 
 def test_github_list_query_avoids_nested_node_heavy_fields() -> None:
@@ -204,6 +239,44 @@ def test_analysis_window_and_comparison_rows_split_same_raw_data() -> None:
     assert previous.completed_count == 1
     assert current.completed_count == 1
     assert rows[0]["metric"] == "Completed issues"
+
+
+def test_analysis_payload_is_json_serializable() -> None:
+    mapping = StatusMapping(states={"ready": ["Ready"], "development": ["In Progress"], "done": ["Done"]})
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    issue = JiraIssue(id="1", key="PAY-1", project="PAY", summary="Done", status="Done", created=base, updated=base + timedelta(days=2), resolved=base + timedelta(days=2), changelog=[
+        JiraChange(issue_key="PAY-1", timestamp=base + timedelta(days=1), field="status", from_value="Ready", to_value="In Progress"),
+        JiraChange(issue_key="PAY-1", timestamp=base + timedelta(days=2), field="status", from_value="In Progress", to_value="Done"),
+    ])
+    result = analyse_window(issues=[issue], prs=[], mapping=mapping, jira_url="https://jira.example", start=base, end=base + timedelta(days=7))
+    payload = analysis_payload(result=result, jira_projects=["PAY"], repos=[], weekly_rows=[])
+    rendered = to_pretty_json(payload)
+    assert '"report_type": "delivery_analysis"' in rendered
+    assert '"jira_projects": [' in rendered
+
+
+def test_compare_payload_is_json_serializable() -> None:
+    mapping = StatusMapping(states={"ready": ["Ready"], "development": ["In Progress"], "done": ["Done"]})
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    previous = analyse_window(issues=[], prs=[], mapping=mapping, jira_url="https://jira.example", start=base, end=base + timedelta(days=7))
+    current = analyse_window(issues=[], prs=[], mapping=mapping, jira_url="https://jira.example", start=base + timedelta(days=7), end=base + timedelta(days=14))
+    payload = compare_payload(previous=previous, current=current, jira_projects=["PAY"], repos=[], rows=comparison_rows(previous, current))
+    assert '"report_type": "delivery_comparison"' in to_pretty_json(payload)
+
+
+def test_repo_inference_payload_is_json_serializable() -> None:
+    payload = repo_inference_payload(
+        jira_projects=["PAY"],
+        org=None,
+        days=180,
+        issue_key_count=10,
+        pr_match_count=4,
+        candidates=[{"repository": "my-org/payments-api", "pr_count": 4, "issue_count": 3, "examples": []}],
+        command="uv run delivery analyse --jira-project PAY --repo my-org/payments-api --days 180",
+        min_prs=1,
+        source="Jira development links",
+    )
+    assert '"report_type": "repository_inference"' in to_pretty_json(payload)
 
 
 def test_weekly_breakdown_uses_completed_issues_per_bucket() -> None:

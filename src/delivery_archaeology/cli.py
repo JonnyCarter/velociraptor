@@ -16,6 +16,7 @@ from delivery_archaeology.inference import analyse_command_for_repos, infer_repo
 from delivery_archaeology.jira import JiraApiError, JiraClient, inspect_project, load_or_fetch_development_links, load_or_fetch_issues, period_start
 from delivery_archaeology.normalize import normalize_jira_issues, normalize_prs
 from delivery_archaeology.reporting import render_analysis_report, render_compare_report, render_issue, render_repo_inference_report
+from delivery_archaeology.serialization import analysis_payload, compare_payload, repo_inference_payload, to_pretty_json
 
 
 app = typer.Typer(help="Analyse software delivery flow from Jira and GitHub evidence.")
@@ -50,6 +51,18 @@ def gh_error_or_exit(exc: GhCliError) -> None:
     typer.echo(f"  gh {' '.join(exc.args_used)}", err=True)
     typer.echo(f"  {exc.stderr}", err=True)
     raise typer.Exit(1) from exc
+
+
+def validate_output_format(output_format: str) -> str:
+    normalized = output_format.casefold()
+    if normalized not in {"text", "json"}:
+        typer.echo("Format must be 'text' or 'json'.", err=True)
+        raise typer.Exit(2)
+    return normalized
+
+
+def progress(message: str) -> None:
+    typer.echo(f"[delivery] {message}", err=True)
 
 
 @jira_app.command("test")
@@ -159,24 +172,28 @@ def analyse(
     repo: Annotated[list[str], typer.Option("--repo", help="GitHub repo as owner/name. Can be repeated.")],
     days: Annotated[int, typer.Option(help="Lookback period in days.")] = 180,
     refresh: Annotated[bool, typer.Option(help="Fetch fresh raw Jira and GitHub data.")] = False,
+    output_format: Annotated[str, typer.Option("--format", help="Output format: text or json.")] = "text",
 ) -> None:
+    output_format = validate_output_format(output_format)
     mapping = StatusMapping.load()
     settings = jira_settings_or_exit()
     client = JiraClient(settings)
     try:
-        raw_issues = load_or_fetch_issues(client, jira_project, days, refresh=refresh)
+        raw_issues = load_or_fetch_issues(client, jira_project, days, refresh=refresh, progress=progress)
     except JiraApiError as exc:
         jira_api_error_or_exit(exc)
     finally:
         client.close()
     try:
-        raw_prs = load_or_fetch_all_prs(repo, days, refresh=refresh)
+        raw_prs = load_or_fetch_all_prs(repo, days, refresh=refresh, progress=progress)
     except GhCliError as exc:
         gh_error_or_exit(exc)
     issues = normalize_jira_issues(raw_issues)
     prs = normalize_prs(raw_prs)
+    progress(f"Normalised {len(issues)} Jira issues and {len(prs)} GitHub PRs")
     start = period_start(days)
     end = datetime.now(UTC)
+    progress("Reconstructing delivery timelines and calculating metrics")
     result = analyse_window(
         issues=issues,
         prs=prs,
@@ -185,6 +202,16 @@ def analyse(
         start=start,
         end=end,
     )
+    progress("Building weekly breakdown")
+    weekly_rows = weekly_breakdown(issues=issues, prs=prs, mapping=mapping, start=start, end=end)
+    if output_format == "json":
+        typer.echo(to_pretty_json(analysis_payload(
+            result=result,
+            jira_projects=jira_project,
+            repos=repo,
+            weekly_rows=weekly_rows,
+        )))
+        return
     typer.echo(render_analysis_report(
         start=start,
         end=end,
@@ -202,7 +229,7 @@ def analyse(
         findings=result.findings,
         issue_candidates=result.issue_candidates,
         pr_candidates=result.pr_candidates,
-        weekly_rows=weekly_breakdown(issues=issues, prs=prs, mapping=mapping, start=start, end=end),
+        weekly_rows=weekly_rows,
     ))
 
 
@@ -213,26 +240,30 @@ def compare(
     days: Annotated[int, typer.Option(help="Current lookback window in days.")] = 7,
     compare_days: Annotated[int, typer.Option("--compare", help="Previous comparison window in days.")] = 7,
     refresh: Annotated[bool, typer.Option(help="Fetch fresh raw Jira and GitHub data.")] = False,
+    output_format: Annotated[str, typer.Option("--format", help="Output format: text or json.")] = "text",
 ) -> None:
+    output_format = validate_output_format(output_format)
     mapping = StatusMapping.load()
     settings = jira_settings_or_exit()
     total_days = days + compare_days
     client = JiraClient(settings)
     try:
-        raw_issues = load_or_fetch_issues(client, jira_project, total_days, refresh=refresh)
+        raw_issues = load_or_fetch_issues(client, jira_project, total_days, refresh=refresh, progress=progress)
     except JiraApiError as exc:
         jira_api_error_or_exit(exc)
     finally:
         client.close()
     try:
-        raw_prs = load_or_fetch_all_prs(repo, total_days, refresh=refresh)
+        raw_prs = load_or_fetch_all_prs(repo, total_days, refresh=refresh, progress=progress)
     except GhCliError as exc:
         gh_error_or_exit(exc)
     issues = normalize_jira_issues(raw_issues)
     prs = normalize_prs(raw_prs)
+    progress(f"Normalised {len(issues)} Jira issues and {len(prs)} GitHub PRs")
     end = datetime.now(UTC)
     current_start = end - timedelta(days=days)
     previous_start = current_start - timedelta(days=compare_days)
+    progress("Analysing previous comparison window")
     previous = analyse_window(
         issues=issues,
         prs=prs,
@@ -241,6 +272,7 @@ def compare(
         start=previous_start,
         end=current_start,
     )
+    progress("Analysing current comparison window")
     current = analyse_window(
         issues=issues,
         prs=prs,
@@ -249,12 +281,22 @@ def compare(
         start=current_start,
         end=end,
     )
+    rows = comparison_rows(previous, current)
+    if output_format == "json":
+        typer.echo(to_pretty_json(compare_payload(
+            previous=previous,
+            current=current,
+            jira_projects=jira_project,
+            repos=repo,
+            rows=rows,
+        )))
+        return
     typer.echo(render_compare_report(
         jira_projects=jira_project,
         repos=repo,
         previous=previous,
         current=current,
-        rows=comparison_rows(previous, current),
+        rows=rows,
     ))
 
 
@@ -268,11 +310,13 @@ def infer_repos(
     max_repos: Annotated[int, typer.Option(help="Maximum repos to include in the suggested command.")] = 12,
     issue_type: Annotated[list[str] | None, typer.Option("--issue-type", help="Optional Jira issue type filter. Can be repeated.")] = None,
     refresh: Annotated[bool, typer.Option(help="Fetch fresh Jira data instead of using local cache.")] = False,
+    output_format: Annotated[str, typer.Option("--format", help="Output format: text or json.")] = "text",
 ) -> None:
+    output_format = validate_output_format(output_format)
     settings = jira_settings_or_exit()
     client = JiraClient(settings)
     try:
-        raw_issues = load_or_fetch_issues(client, jira_project, days, refresh=refresh)
+        raw_issues = load_or_fetch_issues(client, jira_project, days, refresh=refresh, progress=progress)
     except JiraApiError as exc:
         jira_api_error_or_exit(exc)
     finally:
@@ -285,6 +329,7 @@ def infer_repos(
     )
     sampled_issue_keys = set(issue_keys)
     sampled_issues = [issue for issue in issues if issue.key in sampled_issue_keys]
+    progress(f"Selected {len(issue_keys)} Jira issue keys for repository inference")
     client = JiraClient(settings)
     try:
         development_links = load_or_fetch_development_links(
@@ -293,6 +338,7 @@ def infer_repos(
             jira_project,
             days,
             refresh=refresh,
+            progress=progress,
         )
     except JiraApiError as exc:
         jira_api_error_or_exit(exc)
@@ -300,11 +346,13 @@ def infer_repos(
         client.close()
     source = "Jira development links"
     search_results = []
+    progress("Inferring repositories from Jira development links")
     inferred = infer_repos_from_jira_development_links(development_links)
     if not inferred and org:
         source = "GitHub issue search fallback"
+        progress("No Jira PR links found; using bounded GitHub issue-search fallback")
         try:
-            search_results = search_prs_for_issue_keys(org, issue_keys, days=days)
+            search_results = search_prs_for_issue_keys(org, issue_keys, days=days, progress=progress)
         except GhCliError as exc:
             gh_error_or_exit(exc)
         inferred = infer_repos_from_search_results(search_results, sampled_issue_keys)
@@ -314,14 +362,29 @@ def infer_repos(
         if int(candidate["pr_count"]) >= min_prs
     ][:max_repos]
     repos = [str(candidate["repository"]) for candidate in candidates]
+    pr_match_count = sum(int(candidate["pr_count"]) for candidate in inferred) if source == "Jira development links" else len(search_results)
+    command = analyse_command_for_repos(jira_project, repos, days)
+    if output_format == "json":
+        typer.echo(to_pretty_json(repo_inference_payload(
+            jira_projects=jira_project,
+            org=org,
+            days=days,
+            issue_key_count=len(issue_keys),
+            pr_match_count=pr_match_count,
+            candidates=candidates,
+            command=command,
+            min_prs=min_prs,
+            source=source,
+        )))
+        return
     typer.echo(render_repo_inference_report(
         jira_projects=jira_project,
         org=org,
         days=days,
         issue_key_count=len(issue_keys),
-        searched_pr_count=sum(int(candidate["pr_count"]) for candidate in inferred) if source == "Jira development links" else len(search_results),
+        searched_pr_count=pr_match_count,
         candidates=candidates,
-        command=analyse_command_for_repos(jira_project, repos, days),
+        command=command,
         min_prs=min_prs,
         source=source,
     ))
@@ -342,7 +405,7 @@ def issue(issue_key: str, days: Annotated[int, typer.Option()] = 365, refresh: A
     mapping = StatusMapping.load()
     client = JiraClient(jira_settings_or_exit())
     try:
-        raw = load_or_fetch_issues(client, [project], days, refresh=refresh)
+        raw = load_or_fetch_issues(client, [project], days, refresh=refresh, progress=progress)
     except JiraApiError as exc:
         jira_api_error_or_exit(exc)
     finally:
