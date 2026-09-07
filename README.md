@@ -136,6 +136,8 @@ Use `--refresh` to fetch fresh raw data instead of using local cache.
 
 Raw Jira responses are cached under `data/raw/jira/`. Raw GitHub PR JSON is cached under `data/raw/github/`.
 
+Jira project versions are also cached under `data/raw/jira/` so reports can show releases whose Jira `releaseDate` falls inside the analysis period.
+
 If a larger matching cache already exists, the CLI reuses it for smaller analyses. For example, a prior 180-day pull can support a 14-day comparison without another Jira or GitHub fetch.
 
 Compare the current period with the immediately preceding period:
@@ -179,6 +181,8 @@ Jira issue fields include issue identity, project, issue type, summary, status, 
 
 Jira changelog entries preserve issue key, timestamp, field, from value, and to value for status, assignee, sprint, story points, priority, and fix version changes.
 
+Jira project versions are collected to identify releases in the selected timeframe.
+
 GitHub PR collection uses `gh pr list` and collects PR metadata, review data, commits, size, branches, labels, and merge/close timestamps.
 
 ## Status Mapping
@@ -201,6 +205,7 @@ Unknown Jira statuses are reported and are not silently classified.
 The initial `analyse` command reports:
 
 - issue counts and completed work;
+- issue type mix, bug counts, and releases in the selected timeframe;
 - cycle-time median, P75, and P95;
 - throughput per week;
 - time by Jira workflow state;

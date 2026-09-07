@@ -20,6 +20,8 @@ def render_analysis_report(
     repos: list[str],
     delivery: dict[str, object],
     github: dict[str, object],
+    issue_mix: dict[str, object],
+    releases: dict[str, object],
     jira_issue_count: int,
     completed_count: int,
     linked_completed: int,
@@ -53,6 +55,31 @@ def render_analysis_report(
         f"Unknown Jira statuses:       {', '.join(sorted(unknown_statuses)) if unknown_statuses else 'none'}",
         f"Missing resolution dates:    {missing_resolution_dates}",
         f"PRs without Jira links:      {pr_without_links}",
+        "",
+        "WORK MIX AND RELEASES",
+        "---------------------",
+        "",
+        f"Issues touched:              {jira_issue_count}",
+        f"Bugs touched:                {issue_mix.get('bugs_touched', 0)} ({_fmt_pct(issue_mix.get('bug_percent_touched'))})",
+        f"Bugs completed:              {issue_mix.get('bugs_completed', 0)} ({_fmt_pct(issue_mix.get('bug_percent_completed'))})",
+        f"Releases in period:          {releases.get('release_count', 0)}",
+        f"Release data errors:         {releases.get('error_count', 0)}",
+        "",
+        "Issue types touched",
+        "",
+        *_render_count_mapping(issue_mix.get("touched_by_type")),
+        "",
+        "Issue types completed",
+        "",
+        *_render_count_mapping(issue_mix.get("completed_by_type")),
+        "",
+        "Releases",
+        "",
+        *_render_releases(releases.get("releases")),
+        "",
+        "Fix versions on completed work",
+        "",
+        *_render_fix_versions(issue_mix.get("fix_versions_on_completed_work")),
         "",
         "DELIVERY FLOW",
         "-------------",
@@ -349,7 +376,7 @@ def _render_candidates(candidates: list[ReviewCandidate]) -> list[str]:
 def _render_weekly_rows(rows: list[dict[str, object]]) -> list[str]:
     if not rows:
         return ["none"]
-    lines = [f"{'Week':<23} {'Done':>6} {'Median':>8} {'P95':>8} {'Blocked':>9} {'PRs':>6}"]
+    lines = [f"{'Week':<23} {'Done':>6} {'Bugs':>6} {'Median':>8} {'P95':>8} {'Blocked':>9} {'PRs':>6}"]
     for row in rows:
         start = row["start"]
         end = row["end"]
@@ -358,11 +385,48 @@ def _render_weekly_rows(rows: list[dict[str, object]]) -> list[str]:
         lines.append(
             f"{start:%-d %b} - {end:%-d %b}".ljust(23)
             + f" {int(row['completed']):>6}"
+            + f" {int(row.get('bugs_completed', 0)):>6}"
             + f" {_fmt_unit(row['cycle_median'], 'days'):>8}"
             + f" {_fmt_unit(row['cycle_p95'], 'days'):>8}"
             + f" {_fmt_unit(row['blocked_percent'], 'percent'):>9}"
             + f" {int(row['prs']):>6}"
         )
+    return lines
+
+
+def _render_count_mapping(value: object) -> list[str]:
+    if not isinstance(value, dict) or not value:
+        return ["none"]
+    return [f"{str(name):<28}{int(count)}" for name, count in value.items()]
+
+
+def _render_releases(value: object) -> list[str]:
+    if not isinstance(value, list) or not value:
+        return ["none"]
+    lines = [f"{'DATE':<12} {'PROJECT':<10} {'STATUS':<10} NAME"]
+    for release in value[:12]:
+        if not isinstance(release, dict):
+            continue
+        status = "released" if release.get("released") else "planned"
+        name = str(release.get("name") or "")
+        project = str(release.get("project") or "")
+        release_date = str(release.get("release_date") or "")
+        lines.append(f"{release_date:<12} {project:<10} {status:<10} {name}")
+    if len(value) > 12:
+        lines.append(f"... {len(value) - 12} more")
+    return lines
+
+
+def _render_fix_versions(value: object) -> list[str]:
+    if not isinstance(value, list) or not value:
+        return ["none"]
+    lines = [f"{'COMPLETED':>9}  VERSION"]
+    for item in value[:12]:
+        if not isinstance(item, dict):
+            continue
+        lines.append(f"{int(item.get('completed_issues', 0)):>9}  {item.get('name') or ''}")
+    if len(value) > 12:
+        lines.append(f"... {len(value) - 12} more")
     return lines
 
 

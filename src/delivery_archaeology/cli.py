@@ -14,7 +14,7 @@ from delivery_archaeology.flow import blocked_days, cycle_time_days, reconstruct
 from delivery_archaeology.github import GhCliError, filter_and_sort_repos, load_or_fetch_all_prs, relative_updated, repos_for_org
 from delivery_archaeology.github import infer_repos_from_search_results, search_prs_for_issue_keys
 from delivery_archaeology.inference import analyse_command_for_repos, infer_repos_from_jira_development_links, issue_keys_for_repo_inference
-from delivery_archaeology.jira import JiraApiError, JiraClient, inspect_project, load_or_fetch_development_links, load_or_fetch_issues
+from delivery_archaeology.jira import JiraApiError, JiraClient, inspect_project, load_or_fetch_development_links, load_or_fetch_issues, load_or_fetch_project_versions
 from delivery_archaeology.normalize import normalize_jira_issues, normalize_prs
 from delivery_archaeology.processed import current_command, payload_with_run_metadata, text_with_run_metadata, write_processed_report
 from delivery_archaeology.reporting import render_analysis_report, render_compare_report, render_issue, render_repo_inference_report
@@ -229,6 +229,7 @@ def analyse(
     client = JiraClient(settings)
     try:
         raw_issues = load_or_fetch_issues(client, jira_project, days, refresh=refresh, progress=progress)
+        raw_versions = load_or_fetch_project_versions(client, jira_project, refresh=refresh, progress=progress)
     except JiraApiError as exc:
         jira_api_error_or_exit(exc)
     finally:
@@ -250,6 +251,7 @@ def analyse(
         jira_url=settings.url,
         start=start,
         end=end,
+        versions=raw_versions,
     )
     progress("Building weekly breakdown")
     weekly_rows = weekly_breakdown(issues=issues, prs=prs, mapping=mapping, start=start, end=end)
@@ -282,6 +284,8 @@ def analyse(
         repos=repo,
         delivery=result.delivery,
         github=result.github,
+        issue_mix=result.issue_mix,
+        releases=result.releases,
         jira_issue_count=result.jira_issue_count,
         completed_count=result.completed_count,
         linked_completed=result.linked_completed,
@@ -323,6 +327,7 @@ def compare(
     client = JiraClient(settings)
     try:
         raw_issues = load_or_fetch_issues(client, jira_project, total_days, refresh=refresh, progress=progress)
+        raw_versions = load_or_fetch_project_versions(client, jira_project, refresh=refresh, progress=progress)
     except JiraApiError as exc:
         jira_api_error_or_exit(exc)
     finally:
@@ -345,6 +350,7 @@ def compare(
         jira_url=settings.url,
         start=previous_start,
         end=current_start,
+        versions=raw_versions,
     )
     progress("Analysing current comparison window")
     current = analyse_window(
@@ -354,6 +360,7 @@ def compare(
         jira_url=settings.url,
         start=current_start,
         end=end,
+        versions=raw_versions,
     )
     rows = comparison_rows(previous, current)
     if output_format == "json":

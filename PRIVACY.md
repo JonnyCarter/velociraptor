@@ -21,6 +21,7 @@ Raw Jira responses are cached under `data/raw/jira/` and may include:
 
 - issue keys, summaries, statuses, priorities, labels, components, fix versions, sprint/team fields, and assignees;
 - changelog history for status, assignee, sprint, story points, priority, and fix version changes;
+- project versions and release dates;
 - custom fields returned by the Jira API.
 
 Raw GitHub responses are cached under `data/raw/github/` and may include:

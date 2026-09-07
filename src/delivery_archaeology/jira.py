@@ -57,6 +57,9 @@ class JiraClient:
     def project(self, key: str) -> dict[str, Any]:
         return self._get(f"/rest/api/2/project/{key}")
 
+    def project_versions(self, key: str) -> list[dict[str, Any]]:
+        return self._get(f"/rest/api/2/project/{key}/versions")
+
     def statuses_for_project(self, key: str) -> list[str]:
         data = self._get(f"/rest/api/2/project/{key}/statuses")
         return sorted({
@@ -204,6 +207,10 @@ def cache_path_for_development_links(projects: list[str], days: int) -> Path:
     return RAW_JIRA_DIR / f"development_links_{slug}_{days}d.json"
 
 
+def cache_path_for_project_versions(project: str) -> Path:
+    return RAW_JIRA_DIR / f"versions_{project}.json"
+
+
 def covering_cache_path_for_projects(projects: list[str], days: int) -> Path | None:
     slug = "_".join(sorted(projects))
     candidates: list[tuple[int, Path]] = []
@@ -289,6 +296,41 @@ def load_or_fetch_development_links(
     if progress:
         progress(f"Wrote Jira development-link cache: {path}")
     return data
+
+
+def load_or_fetch_project_versions(
+    client: JiraClient,
+    projects: list[str],
+    *,
+    refresh: bool,
+    progress: Progress = None,
+) -> list[dict[str, Any]]:
+    RAW_JIRA_DIR.mkdir(parents=True, exist_ok=True)
+    versions: list[dict[str, Any]] = []
+    for project in projects:
+        path = cache_path_for_project_versions(project)
+        if path.exists() and not refresh:
+            if progress:
+                progress(f"Using Jira versions cache: {path}")
+            project_versions = json.loads(path.read_text())
+        else:
+            if progress:
+                progress(f"Fetching Jira versions for {project}")
+            try:
+                project_versions = client.project_versions(project)
+            except JiraApiError as exc:
+                if progress:
+                    progress(f"Could not fetch Jira versions for {project}: HTTP {exc.status_code}")
+                project_versions = [{"project": project, "_error": f"HTTP {exc.status_code}: {exc.detail}"}]
+            else:
+                path.write_text(json.dumps(project_versions, indent=2, sort_keys=True))
+                if progress:
+                    progress(f"Wrote Jira versions cache: {path}")
+        for version in project_versions:
+            enriched = dict(version)
+            enriched.setdefault("project", project)
+            versions.append(enriched)
+    return versions
 
 
 def inspect_project(client: JiraClient, project_key: str, days: int = 180) -> dict[str, Any]:

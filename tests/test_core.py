@@ -15,9 +15,9 @@ from delivery_archaeology.flow import reconstruct_issue, rework_loops
 from delivery_archaeology.github import GITHUB_SEARCH_ISSUE_KEY_CHUNK_SIZE, GhCliError, PR_LIST_FIELDS, filter_and_sort_repos, pr_list_args, pr_view_args
 from delivery_archaeology.github import infer_repos_from_search_results, search_prs_for_issue_keys
 from delivery_archaeology.inference import analyse_command_for_repos, extract_pr_urls, infer_repos_from_jira_development_links, issue_keys_for_repo_inference, repo_from_pr_url
-from delivery_archaeology.jira import covering_cache_path_for_projects, load_or_fetch_development_links, search_payload, updated_since_jql
+from delivery_archaeology.jira import covering_cache_path_for_projects, load_or_fetch_development_links, load_or_fetch_project_versions, search_payload, updated_since_jql
 from delivery_archaeology.linking import keys_in_pr
-from delivery_archaeology.metrics import delivery_metrics, issue_flow_records, issue_review_candidates, pr_metrics, pr_review_candidates
+from delivery_archaeology.metrics import delivery_metrics, issue_flow_records, issue_mix_metrics, issue_review_candidates, pr_metrics, pr_review_candidates, release_metrics
 from delivery_archaeology.normalize import JiraChange, JiraIssue, PullRequest
 from delivery_archaeology.processed import current_command, payload_with_run_metadata, text_with_run_metadata, write_processed_report
 from delivery_archaeology.serialization import analysis_payload, compare_payload, repo_inference_payload, to_pretty_json
@@ -119,6 +119,25 @@ def test_development_link_progress_counts_uncached_issues(tmp_path, monkeypatch)
     assert "Fetching Jira development links for 1 issues" in messages
     assert "Jira development links fetched: 1/1" in messages
     assert set(result) == {"PAY-1", "PAY-2"}
+
+
+def test_project_versions_are_cached_per_project(tmp_path, monkeypatch) -> None:
+    import delivery_archaeology.jira as jira
+
+    class FakeClient:
+        def project_versions(self, project: str) -> list[dict[str, object]]:
+            return [{"name": "2026.1", "releaseDate": "2026-01-10", "released": True}]
+
+    monkeypatch.setattr(jira, "RAW_JIRA_DIR", tmp_path)
+    messages: list[str] = []
+
+    first = load_or_fetch_project_versions(FakeClient(), ["PAY"], refresh=False, progress=messages.append)
+    second = load_or_fetch_project_versions(FakeClient(), ["PAY"], refresh=False, progress=messages.append)
+
+    assert first == second
+    assert first[0]["project"] == "PAY"
+    assert "Fetching Jira versions for PAY" in messages
+    assert any(message.startswith("Using Jira versions cache:") for message in messages)
 
 
 def test_github_list_query_avoids_nested_node_heavy_fields() -> None:
@@ -267,35 +286,42 @@ def test_analysis_window_and_comparison_rows_split_same_raw_data() -> None:
     mapping = StatusMapping(states={"ready": ["Ready"], "development": ["In Progress"], "done": ["Done"]})
     base = datetime(2026, 1, 1, tzinfo=UTC)
     issues = [
-        JiraIssue(id="1", key="PAY-1", project="PAY", summary="Previous", status="Done", created=base, updated=base + timedelta(days=4), resolved=base + timedelta(days=4), changelog=[
+        JiraIssue(id="1", key="PAY-1", project="PAY", issue_type="Bug", summary="Previous", status="Done", created=base, updated=base + timedelta(days=4), resolved=base + timedelta(days=4), fix_versions=["2026.1"], changelog=[
             JiraChange(issue_key="PAY-1", timestamp=base + timedelta(days=1), field="status", from_value="Ready", to_value="In Progress"),
             JiraChange(issue_key="PAY-1", timestamp=base + timedelta(days=4), field="status", from_value="In Progress", to_value="Done"),
         ]),
-        JiraIssue(id="2", key="PAY-2", project="PAY", summary="Current", status="Done", created=base + timedelta(days=7), updated=base + timedelta(days=10), resolved=base + timedelta(days=10), changelog=[
+        JiraIssue(id="2", key="PAY-2", project="PAY", issue_type="Story", summary="Current", status="Done", created=base + timedelta(days=7), updated=base + timedelta(days=10), resolved=base + timedelta(days=10), changelog=[
             JiraChange(issue_key="PAY-2", timestamp=base + timedelta(days=8), field="status", from_value="Ready", to_value="In Progress"),
             JiraChange(issue_key="PAY-2", timestamp=base + timedelta(days=10), field="status", from_value="In Progress", to_value="Done"),
         ]),
     ]
-    previous = analyse_window(issues=issues, prs=[], mapping=mapping, jira_url="https://jira.example", start=base, end=base + timedelta(days=7))
-    current = analyse_window(issues=issues, prs=[], mapping=mapping, jira_url="https://jira.example", start=base + timedelta(days=7), end=base + timedelta(days=14))
+    versions = [{"project": "PAY", "name": "2026.1", "releaseDate": "2026-01-04", "released": True}]
+    previous = analyse_window(issues=issues, prs=[], mapping=mapping, jira_url="https://jira.example", start=base, end=base + timedelta(days=7), versions=versions)
+    current = analyse_window(issues=issues, prs=[], mapping=mapping, jira_url="https://jira.example", start=base + timedelta(days=7), end=base + timedelta(days=14), versions=versions)
     rows = comparison_rows(previous, current)
     assert previous.completed_count == 1
     assert current.completed_count == 1
+    assert previous.issue_mix["bugs_completed"] == 1
+    assert previous.releases["release_count"] == 1
     assert rows[0]["metric"] == "Completed issues"
+    assert rows[1]["metric"] == "Bugs completed"
 
 
 def test_analysis_payload_is_json_serializable() -> None:
     mapping = StatusMapping(states={"ready": ["Ready"], "development": ["In Progress"], "done": ["Done"]})
     base = datetime(2026, 1, 1, tzinfo=UTC)
-    issue = JiraIssue(id="1", key="PAY-1", project="PAY", summary="Done", status="Done", created=base, updated=base + timedelta(days=2), resolved=base + timedelta(days=2), changelog=[
+    issue = JiraIssue(id="1", key="PAY-1", project="PAY", issue_type="Defect", summary="Done", status="Done", created=base, updated=base + timedelta(days=2), resolved=base + timedelta(days=2), changelog=[
         JiraChange(issue_key="PAY-1", timestamp=base + timedelta(days=1), field="status", from_value="Ready", to_value="In Progress"),
         JiraChange(issue_key="PAY-1", timestamp=base + timedelta(days=2), field="status", from_value="In Progress", to_value="Done"),
     ])
-    result = analyse_window(issues=[issue], prs=[], mapping=mapping, jira_url="https://jira.example", start=base, end=base + timedelta(days=7))
+    versions = [{"project": "PAY", "name": "2026.1", "releaseDate": "2026-01-03", "released": True}]
+    result = analyse_window(issues=[issue], prs=[], mapping=mapping, jira_url="https://jira.example", start=base, end=base + timedelta(days=7), versions=versions)
     payload = analysis_payload(result=result, jira_projects=["PAY"], repos=[], weekly_rows=[])
     rendered = to_pretty_json(payload)
     assert '"report_type": "delivery_analysis"' in rendered
     assert '"jira_projects": [' in rendered
+    assert '"work_mix": {' in rendered
+    assert '"releases": {' in rendered
 
 
 def test_compare_payload_is_json_serializable() -> None:
@@ -320,6 +346,38 @@ def test_repo_inference_payload_is_json_serializable() -> None:
         source="Jira development links",
     )
     assert '"report_type": "repository_inference"' in to_pretty_json(payload)
+
+
+def test_issue_mix_metrics_counts_bugs_and_fix_versions() -> None:
+    issues = [
+        JiraIssue(id="1", key="PAY-1", project="PAY", issue_type="Bug", fix_versions=["2026.1"]),
+        JiraIssue(id="2", key="PAY-2", project="PAY", issue_type="Story", fix_versions=["2026.1"]),
+        JiraIssue(id="3", key="PAY-3", project="PAY", issue_type="Defect"),
+    ]
+    metrics = issue_mix_metrics(issues, {"PAY-1", "PAY-2"})
+    assert metrics["bugs_touched"] == 2
+    assert metrics["bugs_completed"] == 1
+    assert metrics["completed_by_type"] == {"Bug": 1, "Story": 1}
+    assert metrics["fix_versions_on_completed_work"] == [{"name": "2026.1", "completed_issues": 2}]
+
+
+def test_release_metrics_counts_jira_versions_in_window() -> None:
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    versions = [
+        {"project": "PAY", "name": "2026.1", "releaseDate": "2026-01-02", "released": True},
+        {"project": "PAY", "name": "2026.2", "releaseDate": "2026-01-08", "released": False},
+        {"project": "PAY", "name": "2025.9", "releaseDate": "2025-12-31", "released": True},
+    ]
+    metrics = release_metrics(versions, start=base, end=base + timedelta(days=7))
+    assert metrics["release_count"] == 1
+    assert metrics["released_count"] == 1
+    assert metrics["releases"] == [{
+        "project": "PAY",
+        "name": "2026.1",
+        "release_date": "2026-01-02",
+        "released": True,
+        "archived": False,
+    }]
 
 
 def test_processed_text_report_includes_command_and_run_time() -> None:
@@ -441,12 +499,13 @@ def test_format_bytes_uses_readable_units() -> None:
 def test_weekly_breakdown_uses_completed_issues_per_bucket() -> None:
     mapping = StatusMapping(states={"ready": ["Ready"], "development": ["In Progress"], "done": ["Done"]})
     base = datetime(2026, 1, 1, tzinfo=UTC)
-    issue = JiraIssue(id="1", key="PAY-1", project="PAY", summary="Done", status="Done", created=base, updated=base + timedelta(days=8), resolved=base + timedelta(days=8), changelog=[
+    issue = JiraIssue(id="1", key="PAY-1", project="PAY", issue_type="Bug", summary="Done", status="Done", created=base, updated=base + timedelta(days=8), resolved=base + timedelta(days=8), changelog=[
         JiraChange(issue_key="PAY-1", timestamp=base + timedelta(days=1), field="status", from_value="Ready", to_value="In Progress"),
         JiraChange(issue_key="PAY-1", timestamp=base + timedelta(days=8), field="status", from_value="In Progress", to_value="Done"),
     ])
     rows = weekly_breakdown(issues=[issue], prs=[], mapping=mapping, start=base, end=base + timedelta(days=14))
     assert [row["completed"] for row in rows] == [0, 1]
+    assert [row["bugs_completed"] for row in rows] == [0, 1]
 
 
 def test_reconstruct_preserves_repeated_states_as_rework() -> None:

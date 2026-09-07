@@ -13,8 +13,10 @@ from delivery_archaeology.metrics import (
     delivery_metrics,
     issue_flow_records,
     issue_review_candidates,
+    issue_mix_metrics,
     pr_metrics,
     pr_review_candidates,
+    release_metrics,
 )
 from delivery_archaeology.normalize import JiraIssue, PullRequest
 
@@ -30,6 +32,8 @@ class AnalysisResult:
     records: list[IssueFlowRecord]
     delivery: dict[str, object]
     github: dict[str, object]
+    issue_mix: dict[str, object]
+    releases: dict[str, object]
     jira_issue_count: int
     completed_count: int
     linked_completed: int
@@ -50,6 +54,7 @@ def analyse_window(
     jira_url: str,
     start: datetime,
     end: datetime,
+    versions: list[dict[str, object]] | None = None,
 ) -> AnalysisResult:
     days = max((end - start).days, 1)
     all_timelines = {issue.key: reconstruct_issue(issue, mapping) for issue in issues}
@@ -86,6 +91,8 @@ def analyse_window(
     )
     delivery = delivery_metrics(completed_records, window_timelines, days)
     github = pr_metrics(window_prs)
+    issue_mix = issue_mix_metrics(window_issues, completed_keys)
+    releases = release_metrics(versions or [], start=start, end=end)
     findings = build_findings(
         delivery,
         github,
@@ -104,6 +111,8 @@ def analyse_window(
         records=completed_records,
         delivery=delivery,
         github=github,
+        issue_mix=issue_mix,
+        releases=releases,
         jira_issue_count=len(window_issue_keys),
         completed_count=len(completed_keys),
         linked_completed=linked_completed,
@@ -139,10 +148,17 @@ def weekly_breakdown(
         bucket_prs = [pr for pr in prs if _pr_touches_window(pr, bucket_start, bucket_end)]
         cycle_values = [record.cycle_days for record in completed if record.cycle_days is not None]
         blocked = [record for record in completed if record.blocked_days > 0]
+        bucket_issues = [
+            issue for issue in issues
+            if _issue_touches_window(issue, bucket_start, bucket_end)
+        ]
+        completed_keys = {record.key for record in completed}
+        issue_mix = issue_mix_metrics(bucket_issues, completed_keys)
         rows.append({
             "start": bucket_start,
             "end": bucket_end,
             "completed": len(completed),
+            "bugs_completed": issue_mix["bugs_completed"],
             "cycle_median": _percentile(cycle_values, 50),
             "cycle_p95": _percentile(cycle_values, 95),
             "blocked_percent": len(blocked) / len(completed) * 100 if completed else 0.0,
@@ -155,7 +171,9 @@ def weekly_breakdown(
 def comparison_rows(previous: AnalysisResult, current: AnalysisResult) -> list[dict[str, object]]:
     specs = [
         ("Completed issues", previous.completed_count, current.completed_count, ""),
+        ("Bugs completed", previous.issue_mix.get("bugs_completed"), current.issue_mix.get("bugs_completed"), ""),
         ("Jira issues touched", previous.jira_issue_count, current.jira_issue_count, ""),
+        ("Releases", previous.releases.get("release_count"), current.releases.get("release_count"), ""),
         ("Median cycle time", previous.delivery.get("cycle_median"), current.delivery.get("cycle_median"), "days"),
         ("P95 cycle time", previous.delivery.get("cycle_p95"), current.delivery.get("cycle_p95"), "days"),
         ("Blocked issues", previous.delivery.get("blocked_percent"), current.delivery.get("blocked_percent"), "percent"),

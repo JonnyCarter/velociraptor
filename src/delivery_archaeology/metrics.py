@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Iterable
+from typing import Any, Iterable
 
 import pandas as pd
 
@@ -86,6 +86,70 @@ def delivery_metrics(records: list[IssueFlowRecord], timelines: dict[str, list[S
         "flow_efficiency": flow_efficiency(completed),
         "sample_size": len(completed),
     }
+
+
+def issue_mix_metrics(issues: list[JiraIssue], completed_keys: set[str]) -> dict[str, object]:
+    touched_by_type = _count_issue_types(issues)
+    completed_issues = [issue for issue in issues if issue.key in completed_keys]
+    completed_by_type = _count_issue_types(completed_issues)
+    bugs_touched = sum(count for issue_type, count in touched_by_type.items() if is_bug_issue_type(issue_type))
+    bugs_completed = sum(count for issue_type, count in completed_by_type.items() if is_bug_issue_type(issue_type))
+    fix_version_counts: dict[str, int] = defaultdict(int)
+    for issue in completed_issues:
+        for version in issue.fix_versions:
+            fix_version_counts[version] += 1
+    return {
+        "sample_size": len(issues),
+        "completed_sample_size": len(completed_issues),
+        "touched_by_type": dict(sorted(touched_by_type.items(), key=lambda item: (-item[1], item[0].casefold()))),
+        "completed_by_type": dict(sorted(completed_by_type.items(), key=lambda item: (-item[1], item[0].casefold()))),
+        "bugs_touched": bugs_touched,
+        "bugs_completed": bugs_completed,
+        "bug_percent_touched": bugs_touched / len(issues) * 100 if issues else 0.0,
+        "bug_percent_completed": bugs_completed / len(completed_issues) * 100 if completed_issues else 0.0,
+        "fix_versions_on_completed_work": [
+            {"name": name, "completed_issues": count}
+            for name, count in sorted(fix_version_counts.items(), key=lambda item: (-item[1], item[0].casefold()))
+        ],
+    }
+
+
+def release_metrics(versions: list[dict[str, Any]], *, start: datetime, end: datetime) -> dict[str, object]:
+    errors = [
+        {"project": version.get("project"), "error": version.get("_error")}
+        for version in versions
+        if version.get("_error")
+    ]
+    releases = []
+    for version in versions:
+        release_date = _parse_release_date(version.get("releaseDate"))
+        if release_date is None or not (start <= release_date < end):
+            continue
+        releases.append({
+            "project": version.get("project"),
+            "name": version.get("name"),
+            "release_date": release_date.date().isoformat(),
+            "released": bool(version.get("released")),
+            "archived": bool(version.get("archived")),
+        })
+    releases = sorted(
+        releases,
+        key=lambda item: (str(item["release_date"]), str(item.get("project") or ""), str(item.get("name") or "")),
+    )
+    return {
+        "release_count": len(releases),
+        "released_count": sum(1 for release in releases if release["released"]),
+        "unreleased_count": sum(1 for release in releases if not release["released"]),
+        "sample_size": len(versions),
+        "error_count": len(errors),
+        "errors": errors,
+        "releases": releases,
+    }
+
+
+def is_bug_issue_type(issue_type: str | None) -> bool:
+    normalized = (issue_type or "").casefold()
+    return "bug" in normalized or "defect" in normalized
 
 
 def age_unresolved(records: list[IssueFlowRecord]) -> dict[str, float | None]:
@@ -262,3 +326,19 @@ def _review_submitted_at(review: dict) -> datetime | None:
     from delivery_archaeology.normalize import parse_dt
 
     return parse_dt(review.get("submittedAt") or review.get("createdAt"))
+
+
+def _count_issue_types(issues: list[JiraIssue]) -> dict[str, int]:
+    counts: dict[str, int] = defaultdict(int)
+    for issue in issues:
+        counts[issue.issue_type or "Unknown"] += 1
+    return counts
+
+
+def _parse_release_date(value: object) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value)).replace(tzinfo=UTC)
+    except ValueError:
+        return None

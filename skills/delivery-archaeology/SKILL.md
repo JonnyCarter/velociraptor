@@ -49,6 +49,7 @@ Treat output as delivery-system evidence, not a performance ranking. Focus on:
 - blocked time;
 - workflow loops and rework;
 - cycle-time variability;
+- bug counts, issue type mix, and release evidence;
 - PR review flow;
 - linking and Jira data quality.
 

@@ -33,6 +33,8 @@ def analysis_payload(
             "missing_resolution_dates": result.missing_resolution_dates,
             "prs_without_jira_links": result.pr_without_links,
         },
+        "work_mix": _jsonable(result.issue_mix),
+        "releases": _jsonable(result.releases),
         "delivery_flow": result.delivery,
         "github_flow": result.github,
         "review_candidates": {
@@ -63,6 +65,14 @@ def compare_payload(
             "current": _period_payload(current.start, current.end, current.days),
         },
         "metrics": [_jsonable(row) for row in rows],
+        "work_mix": {
+            "previous": _jsonable(previous.issue_mix),
+            "current": _jsonable(current.issue_mix),
+        },
+        "releases": {
+            "previous": _jsonable(previous.releases),
+            "current": _jsonable(current.releases),
+        },
         "data_quality": {
             "previous": {
                 "unknown_jira_statuses": sorted(previous.unknown_statuses),
