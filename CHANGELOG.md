@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.3 - Clearer Work Mix Reporting
+
+- Renamed Jira issue analysis output to report touched Jira issues consistently.
+- Renamed the analysis JSON data-quality field from `jira_issues_analysed` to `jira_issues_touched`.
+- Excluded Dependabot PRs from the `PRs without Jira links` count.
+
 ## 1.0.2 - Licensing and Ethics Documentation
 
 - Added explicit Apache License 2.0 project metadata.

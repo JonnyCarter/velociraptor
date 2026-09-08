@@ -4,7 +4,7 @@
 
 Small read-only command-line tool for analysing software delivery using Jira Server/Data Center and GitHub evidence.
 
-Current version: `1.0.2`
+Current version: `1.0.3`
 
 It answers one practical question:
 
@@ -69,7 +69,7 @@ This project is licensed under the [Apache License 2.0](LICENSE).
 
 ## Version
 
-This repository is at `1.0.2`, the first usable CLI version with security, licensing, and ethics documentation updates. See [CHANGELOG.md](CHANGELOG.md) for the v1 scope.
+This repository is at `1.0.3`, with clearer touched-work reporting and Dependabot exclusion from missing Jira-link counts. See [CHANGELOG.md](CHANGELOG.md) for release history.
 
 ## Discovery Workflow
 
@@ -208,6 +208,34 @@ Jira changelog entries preserve issue key, timestamp, field, from value, and to 
 Jira project versions are collected to identify releases in the selected timeframe.
 
 GitHub PR collection uses `gh pr list` and collects PR metadata, review data, commits, size, branches, labels, and merge/close timestamps.
+
+## How Reports Are Calculated
+
+Reports are calculated from read-only Jira and GitHub evidence inside the selected period. The analysis window is inclusive of the start date and exclusive of the end date.
+
+Jira issues are counted as touched when their Jira `updated` date or `resolved` date falls inside the selected period. Completed issues are the subset that resolved inside the period, plus issues with no resolution date that are currently in `Done`, `Closed`, or `Released` and were updated inside the period.
+
+Workflow timing is reconstructed from Jira status changelog entries. Each Jira status is mapped to a common state using `config/status_mapping.yaml`. Unknown statuses are reported and are not included in state-duration calculations until they are mapped.
+
+Cycle time is the elapsed time spent outside backlog and done states. Median, P75, and P95 values are percentiles across completed issues with enough status history to calculate a cycle time. Throughput per week is completed issues divided by the number of weeks in the selected period.
+
+Time by state is calculated from the reconstructed status timeline. Blocked time is time spent in statuses mapped to `blocked`. Waiting time is time spent in `ready`, `review`, `qa`, `release`, or `blocked`. Flow efficiency is the median share of cycle time not spent in those waiting states.
+
+Rework loops count when an issue returns to a workflow state it has already visited, excluding backlog and done. Handoffs count transitions between different mapped workflow states.
+
+Work mix is based on touched Jira issues. Bug counts include Jira issue types containing `bug` or `defect`, case-insensitively. Fix-version evidence is counted from completed issues only.
+
+Releases are Jira project versions whose `releaseDate` falls inside the selected period. The report separates versions already marked as released from planned or unreleased versions.
+
+GitHub PR metrics are calculated from PRs touched in the selected period. A PR is included when it was merged or closed in the period, or when it is still open and was updated in the period. PR lifetime is creation to merge or close. First review time is creation to the first review event. Approval-to-merge time is first approval to merge.
+
+Jira/GitHub linking is based on Jira issue keys found in PR titles, branch names, PR bodies, or commit messages. Link coverage is the share of completed Jira issues that have at least one linked PR in the period. `PRs without Jira links` counts PRs in the period with no detectable Jira key, excluding Dependabot PRs.
+
+Review candidates are deterministic examples worth inspecting. Jira candidates are selected from completed issues with long cycle time, blocked time, or workflow loops. PR candidates are selected from long-lived PRs, slow first reviews, or high review back-and-forth.
+
+Comparison reports fetch or reuse one combined dataset, then split it into previous and current periods locally. Weekly breakdowns use the same calculation rules per week.
+
+These metrics are evidence summaries, not performance scores. They depend on Jira resolution dates, status history, workflow mapping, issue-key usage in PRs, and the repositories included in the command.
 
 ## Status Mapping
 

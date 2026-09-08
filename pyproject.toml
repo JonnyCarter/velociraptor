@@ -1,6 +1,6 @@
 [project]
 name = "delivery-archaeology"
-version = "1.0.2"
+version = "1.0.3"
 description = "Command-line delivery-system analysis using Jira and GitHub."
 readme = "README.md"
 license = { file = "LICENSE" }
