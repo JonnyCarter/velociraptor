@@ -405,14 +405,17 @@ def test_repo_inference_payload_is_json_serializable() -> None:
 
 def test_issue_mix_metrics_counts_bugs_and_fix_versions() -> None:
     issues = [
-        JiraIssue(id="1", key="PAY-1", project="PAY", issue_type="Bug", fix_versions=["2026.1"]),
-        JiraIssue(id="2", key="PAY-2", project="PAY", issue_type="Story", fix_versions=["2026.1"]),
-        JiraIssue(id="3", key="PAY-3", project="PAY", issue_type="Defect"),
+        JiraIssue(id="1", key="PAY-1", project="PAY", issue_type="Bug", priority="P1", fix_versions=["2026.1"]),
+        JiraIssue(id="2", key="PAY-2", project="PAY", issue_type="Story", priority="P2", fix_versions=["2026.1"]),
+        JiraIssue(id="3", key="PAY-3", project="PAY", issue_type="Defect", priority="P1"),
+        JiraIssue(id="4", key="PAY-4", project="PAY", issue_type="Task"),
     ]
     metrics = issue_mix_metrics(issues, {"PAY-1", "PAY-2"})
     assert metrics["bugs_touched"] == 2
     assert metrics["bugs_completed"] == 1
     assert metrics["completed_by_type"] == {"Bug": 1, "Story": 1}
+    assert metrics["touched_by_priority"] == {"P1": 2, "P2": 1, "Unknown": 1}
+    assert metrics["completed_by_priority"] == {"P1": 1, "P2": 1}
     assert metrics["fix_versions_on_completed_work"] == [{"name": "2026.1", "completed_issues": 2}]
 
 

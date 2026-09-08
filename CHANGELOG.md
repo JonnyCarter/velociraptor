@@ -5,6 +5,7 @@
 - Renamed Jira issue analysis output to report touched Jira issues consistently.
 - Renamed the analysis JSON data-quality field from `jira_issues_analysed` to `jira_issues_touched`.
 - Excluded Dependabot PRs from the `PRs without Jira links` count.
+- Added touched and completed Jira issue breakdowns by priority/severity.
 
 ## 1.0.2 - Licensing and Ethics Documentation
 

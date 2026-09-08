@@ -223,7 +223,7 @@ Time by state is calculated from the reconstructed status timeline. Blocked time
 
 Rework loops count when an issue returns to a workflow state it has already visited, excluding backlog and done. Handoffs count transitions between different mapped workflow states.
 
-Work mix is based on touched Jira issues. Bug counts include Jira issue types containing `bug` or `defect`, case-insensitively. Fix-version evidence is counted from completed issues only.
+Work mix is based on touched Jira issues. Bug counts include Jira issue types containing `bug` or `defect`, case-insensitively. Priority or severity breakdowns use Jira's priority field and show both touched and completed issues. Fix-version evidence is counted from completed issues only.
 
 Releases are Jira project versions whose `releaseDate` falls inside the selected period. The report separates versions already marked as released from planned or unreleased versions.
 
@@ -257,7 +257,7 @@ Unknown Jira statuses are reported and are not silently classified.
 The initial `analyse` command reports:
 
 - issue counts and completed work;
-- issue type mix, bug counts, and releases in the selected timeframe;
+- issue type mix, priority/severity mix, bug counts, and releases in the selected timeframe;
 - cycle-time median, P75, and P95;
 - throughput per week;
 - time by Jira workflow state;

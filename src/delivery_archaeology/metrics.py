@@ -92,6 +92,8 @@ def issue_mix_metrics(issues: list[JiraIssue], completed_keys: set[str]) -> dict
     touched_by_type = _count_issue_types(issues)
     completed_issues = [issue for issue in issues if issue.key in completed_keys]
     completed_by_type = _count_issue_types(completed_issues)
+    touched_by_priority = _count_priorities(issues)
+    completed_by_priority = _count_priorities(completed_issues)
     bugs_touched = sum(count for issue_type, count in touched_by_type.items() if is_bug_issue_type(issue_type))
     bugs_completed = sum(count for issue_type, count in completed_by_type.items() if is_bug_issue_type(issue_type))
     fix_version_counts: dict[str, int] = defaultdict(int)
@@ -103,6 +105,8 @@ def issue_mix_metrics(issues: list[JiraIssue], completed_keys: set[str]) -> dict
         "completed_sample_size": len(completed_issues),
         "touched_by_type": dict(sorted(touched_by_type.items(), key=lambda item: (-item[1], item[0].casefold()))),
         "completed_by_type": dict(sorted(completed_by_type.items(), key=lambda item: (-item[1], item[0].casefold()))),
+        "touched_by_priority": dict(sorted(touched_by_priority.items(), key=_priority_sort_key)),
+        "completed_by_priority": dict(sorted(completed_by_priority.items(), key=_priority_sort_key)),
         "bugs_touched": bugs_touched,
         "bugs_completed": bugs_completed,
         "bug_percent_touched": bugs_touched / len(issues) * 100 if issues else 0.0,
@@ -333,6 +337,34 @@ def _count_issue_types(issues: list[JiraIssue]) -> dict[str, int]:
     for issue in issues:
         counts[issue.issue_type or "Unknown"] += 1
     return counts
+
+
+def _count_priorities(issues: list[JiraIssue]) -> dict[str, int]:
+    counts: dict[str, int] = defaultdict(int)
+    for issue in issues:
+        counts[issue.priority or "Unknown"] += 1
+    return counts
+
+
+def _priority_sort_key(item: tuple[str, int]) -> tuple[int, int, str]:
+    name, count = item
+    normalized = name.casefold().replace(" ", "")
+    rank = {
+        "p0": 0,
+        "blocker": 0,
+        "highest": 0,
+        "critical": 0,
+        "p1": 1,
+        "high": 1,
+        "p2": 2,
+        "medium": 2,
+        "p3": 3,
+        "low": 3,
+        "p4": 4,
+        "lowest": 4,
+        "unknown": 99,
+    }.get(normalized, 50)
+    return (rank, -count, name.casefold())
 
 
 def _parse_release_date(value: object) -> datetime | None:
