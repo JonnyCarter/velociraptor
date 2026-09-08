@@ -4,7 +4,7 @@
 
 Small read-only command-line tool for analysing software delivery using Jira Server/Data Center and GitHub evidence.
 
-Current version: `1.0.3`
+Current version: `1.0.4`
 
 It answers one practical question:
 
@@ -69,7 +69,7 @@ This project is licensed under the [Apache License 2.0](LICENSE).
 
 ## Version
 
-This repository is at `1.0.3`, with clearer touched-work reporting and Dependabot exclusion from missing Jira-link counts. See [CHANGELOG.md](CHANGELOG.md) for release history.
+This repository is at `1.0.4`, with clearer touched-work reporting, Dependabot exclusion from missing Jira-link counts, and priority/severity breakdowns. See [CHANGELOG.md](CHANGELOG.md) for release history.
 
 ## Discovery Workflow
 

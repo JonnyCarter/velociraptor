@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.3 - Clearer Work Mix Reporting
+## 1.0.4 - Clearer Work Mix Reporting
 
 - Renamed Jira issue analysis output to report touched Jira issues consistently.
 - Renamed the analysis JSON data-quality field from `jira_issues_analysed` to `jira_issues_touched`.
