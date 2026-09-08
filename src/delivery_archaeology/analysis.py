@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from delivery_archaeology.config import StatusMapping
 from delivery_archaeology.findings import Finding, build_findings
 from delivery_archaeology.flow import StateSegment, reconstruct_issue
-from delivery_archaeology.linking import keys_in_pr, link_prs_to_issues
+from delivery_archaeology.linking import is_dependabot_pr, keys_in_pr, link_prs_to_issues
 from delivery_archaeology.metrics import (
     IssueFlowRecord,
     ReviewCandidate,
@@ -74,7 +74,7 @@ def analyse_window(
     linked = link_prs_to_issues(window_prs)
     linked_completed = len([key for key in completed_keys if linked.get(key)])
     link_coverage = linked_completed / len(completed_keys) * 100 if completed_keys else 0.0
-    pr_without_links = sum(1 for pr in window_prs if not keys_in_pr(pr))
+    pr_without_links = sum(1 for pr in window_prs if not is_dependabot_pr(pr) and not keys_in_pr(pr))
     window_issues = [issue for issue in issues if issue.key in window_issue_keys]
     statuses = {issue.status for issue in window_issues if issue.status}
     statuses.update(

@@ -24,7 +24,7 @@ def analysis_payload(
             "repositories": repos,
         },
         "data_quality": {
-            "jira_issues_analysed": result.jira_issue_count,
+            "jira_issues_touched": result.jira_issue_count,
             "completed_issues": result.completed_count,
             "github_prs": result.github.get("pr_count", 0),
             "issues_linked_to_prs": result.linked_completed,

@@ -7,6 +7,7 @@ from delivery_archaeology.normalize import PullRequest
 
 
 ISSUE_KEY_RE = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")
+DEPENDABOT_AUTHORS = {"dependabot[bot]", "dependabot-preview[bot]"}
 
 
 def keys_in_pr(pr: PullRequest) -> set[str]:
@@ -17,6 +18,12 @@ def keys_in_pr(pr: PullRequest) -> set[str]:
         " ".join(_commit_messages(pr)),
     ]
     return set(ISSUE_KEY_RE.findall("\n".join(parts)))
+
+
+def is_dependabot_pr(pr: PullRequest) -> bool:
+    author = (pr.author or "").casefold()
+    head_ref = (pr.head_ref_name or "").casefold()
+    return author in DEPENDABOT_AUTHORS or head_ref.startswith("dependabot/")
 
 
 def link_prs_to_issues(prs: list[PullRequest]) -> dict[str, list[PullRequest]]:

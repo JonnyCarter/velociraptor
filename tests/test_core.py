@@ -16,7 +16,7 @@ from delivery_archaeology.github import GITHUB_SEARCH_ISSUE_KEY_CHUNK_SIZE, GhCl
 from delivery_archaeology.github import infer_repos_from_search_results, search_prs_for_issue_keys
 from delivery_archaeology.inference import analyse_command_for_repos, extract_pr_urls, infer_repos_from_jira_development_links, issue_keys_for_repo_inference, repo_from_pr_url
 from delivery_archaeology.jira import cache_path_for_project_versions, cache_path_for_projects, covering_cache_path_for_projects, load_or_fetch_development_links, load_or_fetch_project_versions, search_payload, updated_since_jql
-from delivery_archaeology.linking import keys_in_pr
+from delivery_archaeology.linking import is_dependabot_pr, keys_in_pr
 from delivery_archaeology.metrics import delivery_metrics, issue_flow_records, issue_mix_metrics, issue_review_candidates, pr_metrics, pr_review_candidates, release_metrics
 from delivery_archaeology.normalize import JiraChange, JiraIssue, PullRequest
 from delivery_archaeology.processed import current_command, payload_with_run_metadata, text_with_run_metadata, write_processed_report
@@ -346,9 +346,37 @@ def test_analysis_payload_is_json_serializable() -> None:
     payload = analysis_payload(result=result, jira_projects=["PAY"], repos=[], weekly_rows=[])
     rendered = to_pretty_json(payload)
     assert '"report_type": "delivery_analysis"' in rendered
+    assert '"jira_issues_touched": 1' in rendered
+    assert '"jira_issues_analysed"' not in rendered
     assert '"jira_projects": [' in rendered
     assert '"work_mix": {' in rendered
     assert '"releases": {' in rendered
+
+
+def test_analysis_excludes_dependabot_from_prs_without_jira_links() -> None:
+    mapping = StatusMapping(states={"done": ["Done"]})
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    prs = [
+        PullRequest(
+            repository="org/repo",
+            number=1,
+            title="Bump dependency",
+            author="dependabot[bot]",
+            created_at=base,
+            merged_at=base + timedelta(days=1),
+        ),
+        PullRequest(
+            repository="org/repo",
+            number=2,
+            title="Manual dependency update",
+            author="alice",
+            created_at=base,
+            merged_at=base + timedelta(days=1),
+        ),
+    ]
+    result = analyse_window(issues=[], prs=prs, mapping=mapping, jira_url="https://jira.example", start=base, end=base + timedelta(days=7))
+    assert result.github["pr_count"] == 2
+    assert result.pr_without_links == 1
 
 
 def test_compare_payload_is_json_serializable() -> None:
@@ -568,6 +596,12 @@ def test_links_keys_from_title_branch_body_and_commits() -> None:
         commits=[{"message": "PLAT-44 wire dependency"}],
     )
     assert keys_in_pr(pr) == {"PAY-123", "LEDGER-9", "IDENT-22", "PLAT-44"}
+
+
+def test_is_dependabot_pr_reads_author_and_branch() -> None:
+    assert is_dependabot_pr(PullRequest(repository="org/repo", number=1, title="Bump", author="dependabot[bot]"))
+    assert is_dependabot_pr(PullRequest(repository="org/repo", number=2, title="Bump", head_ref_name="dependabot/npm/foo-1.2.3"))
+    assert not is_dependabot_pr(PullRequest(repository="org/repo", number=3, title="Manual dependency update", author="alice"))
 
 
 def test_delivery_metrics_include_blocked_impact() -> None:
